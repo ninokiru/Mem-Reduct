@@ -27,6 +27,21 @@ DEFINE_GUID (GUID_TrayIcon, 0xAE9053F0, 0x8D59, 0x4803, 0x9A, 0xBB, 0x74, 0xAF, 
 // minimum pause (in seconds) between usage-based automatic cleanups
 #define AUTOREDUCT_COOLDOWN 30
 
+// update channel (this fork)
+#define UPDATE_MANIFEST_URL L"https://raw.githubusercontent.com/ninokiru/Mem-Reduct/main/VERSION"
+#define UPDATE_RELEASE_URL_PREFIX L"https://github.com/ninokiru/Mem-Reduct/releases/download/"
+
+// hours between automatic update checks
+#define UPDATE_CHECK_PERIOD 6
+
+#define UPDATE_VERSION_MAX_LENGTH 32
+
+// setup.exe is ~2MB; reject anything smaller (error page / truncated download)
+#define UPDATE_MINIMUM_FILE_SIZE 0x40000
+
+#define MOUNTMGR_QUERY_SIZE_DEFAULT 0x1000
+#define MOUNTMGR_QUERY_SIZE_MAX 0x100000
+
 #define DEFAULT_DANGER_LEVEL 90
 #define DEFAULT_WARNING_LEVEL 70
 
@@ -61,6 +76,12 @@ REDUCT_MODIFIEDFILECACHE)
 #define REDUCT_MASK_DEFAULT (REDUCT_WORKINGSET | REDUCT_SYSTEMFILECACHE | REDUCT_STANDBYPRIORITY0LIST | REDUCT_REGISTRYCACHE | REDUCT_COMBINEMEMORYLISTS | REDUCT_MODIFIEDFILECACHE)
 #define REDUCT_MASK_FREEZES (REDUCT_STANDBYLIST | REDUCT_MODIFIEDLIST)
 
+typedef struct _APP_UPDATE_TASK
+{
+	HWND hwnd;
+	BOOLEAN is_silent;
+} APP_UPDATE_TASK, *PAPP_UPDATE_TASK;
+
 typedef struct _STATIC_DATA
 {
 	HDC hdc;
@@ -68,6 +89,7 @@ typedef struct _STATIC_DATA
 	HBITMAP hbitmap;
 	HBITMAP hbitmap_mask;
 	HFONT hfont;
+	HICON hicon;
 	RECT icon_size;
 	ULONG ms_prev;
 } STATIC_DATA, *PSTATIC_DATA;
@@ -77,7 +99,8 @@ typedef enum _CLEANUP_SOURCE_ENUM
 	SOURCE_AUTO,
 	SOURCE_MANUAL,
 	SOURCE_HOTKEY,
-	SOURCE_CMDLINE
+	SOURCE_CMDLINE,
+	SOURCE_MANUAL_REGION
 } CLEANUP_SOURCE_ENUM, *PCLEANUP_SOURCE_ENUM;
 
 

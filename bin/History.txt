@@ -1,3 +1,16 @@
+v0.0.1 (20 October 2026)
+- reset fork version to 0.0.1 with its own update channel
+- added automatic update check with direct in-app installer download
+- fixed build against current routine sdk (removed renamed and missing api calls)
+- fixed tray icon handle leak and drawing surface creation failures
+- fixed volume cache flush mount point query (buffer overflow / leak)
+- fixed message box titles and command line result reporting
+- fixed hotkey repeat triggering (MOD_NOREPEAT)
+- fixed settings: typed values in spin edit boxes are now saved
+- now close button (X) hides to tray instead of quitting
+- added session end handling (logoff / shutdown quits cleanly)
+- updated documentation
+
 v3.5.2 (1 April 2025)
 - added modified file cache clean
 - fixed pagefile displays wrong information (issue #262)

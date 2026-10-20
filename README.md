@@ -30,6 +30,12 @@ You can download either the installer or portable version. For correct working y
 To activate portable mode, create "memreduct.ini" in application folder, or move it from "%APPDATA%\Henry++\Mem Reduct".
 ```
 
+### Command line:
+```
+memreduct.exe -clean       // clear default memory regions
+memreduct.exe -clean:full  // clear all memory regions
+```
+
 ### System requirements:
 - Windows 7, 8, 8.1, 10, 11 (64-bit/ARM64)
 - An SSE2-capable CPU
