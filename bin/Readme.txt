@@ -12,7 +12,7 @@ System requirements:
 
 To activate portable mode, create "memreduct.ini" in application folder, or move it from "%APPDATA%\Henry++\Mem Reduct".
 
-Website: https://github.com/henrypp
-Support: sforce5@mail.ru
+This fork: https://github.com/ninokiru/Mem-Reduct
+Original author: https://github.com/henrypp
 
-(c) 2011-2026 Henry++
+Original work (c) 2011-2026 Henry++

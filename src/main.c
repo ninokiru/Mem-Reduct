@@ -21,8 +21,8 @@ INT WINAPIV compare_numbers (
 {
 	ULONG val1, val2;
 
-	val1 = PtrToUlong (ptr1);
-	val2 = PtrToUlong (ptr2);
+	val1 = *(const PULONG)ptr1;
+	val2 = *(const PULONG)ptr2;
 
 	if (val1 < val2)
 		return -1;
@@ -70,7 +70,8 @@ VOID _app_generate_array (
 			break;
 	}
 
-	qsort_s (integers, count, sizeof (ULONG), &compare_numbers, NULL);
+	if (qsort_s (integers, count, sizeof (ULONG), &compare_numbers, NULL) != 0)
+		_r_log (LOG_LEVEL_ERROR, NULL, L"qsort_s", STATUS_UNSUCCESSFUL, L"_app_generate_array");
 
 	_r_obj_dereference (hashtable);
 }
@@ -87,8 +88,8 @@ VOID _app_generate_menu (
 )
 {
 	WCHAR buffer[0x40];
-	LONG64 menu_value;
-	ULONG menu_id, menu_items = 0;
+	ULONG menu_value;
+	ULONG menu_id;
 	BOOLEAN is_checked = FALSE;
 
 	_r_menu_setitemtext (hsubmenu, 0, TRUE, _r_locale_getstring (IDS_TRAY_DISABLE));
@@ -113,16 +114,14 @@ VOID _app_generate_menu (
 
 		if (value == menu_value)
 		{
-			_r_menu_checkitem (hsubmenu, menu_id, menu_id, MF_BYCOMMAND, menu_id);
+			_r_menu_checkitem (hsubmenu, menu_id, 0, MF_BYCOMMAND, TRUE);
 
 			is_checked = TRUE;
 		}
-
-		menu_items += 1;
 	}
 
 	if (!is_enabled || !is_checked)
-		_r_menu_checkitem (hsubmenu, 0, menu_items + 2, MF_BYPOSITION, 0);
+		_r_menu_checkitem (hsubmenu, 0, 0, MF_BYPOSITION, TRUE);
 }
 
 ULONG _app_getlimitvalue ()
@@ -195,7 +194,9 @@ NTSTATUS _app_flushvolumecache ()
 	IO_STATUS_BLOCK isb;
 	UNICODE_STRING us;
 	HANDLE hdevice, hvolume;
+	NTSTATUS last_status = STATUS_SUCCESS;
 	NTSTATUS status;
+	BOOLEAN is_flushed = FALSE;
 
 	RtlInitUnicodeString (&us, MOUNTMGR_DEVICE_NAME);
 
@@ -227,8 +228,11 @@ NTSTATUS _app_flushvolumecache ()
 	{
 		mountpoint = &object_mountpoints->MountPoints[i];
 
+		if (mountpoint->SymbolicLinkNameLength < sizeof (UNICODE_NULL) || (mountpoint->SymbolicLinkNameLength % sizeof (UNICODE_NULL)) != 0)
+			continue;
+
 		us.Length = mountpoint->SymbolicLinkNameLength;
-		us.MaximumLength = mountpoint->SymbolicLinkNameLength + sizeof (UNICODE_NULL);
+		us.MaximumLength = mountpoint->SymbolicLinkNameLength;
 		us.Buffer = PTR_ADD_OFFSET (object_mountpoints, mountpoint->SymbolicLinkNameOffset);
 
 		if (MOUNTMGR_IS_VOLUME_NAME (&us)) // \\??\\Volume{1111-2222}
@@ -254,6 +258,21 @@ NTSTATUS _app_flushvolumecache ()
 				status = _r_fs_flushfile (hvolume);
 
 				NtClose (hvolume);
+
+				if (NT_SUCCESS (status))
+				{
+					is_flushed = TRUE;
+				}
+				else
+				{
+					_r_log (LOG_LEVEL_ERROR, NULL, L"_app_flushvolumecache", status, L"FlushFileBuffers");
+
+					last_status = status;
+				}
+			}
+			else
+			{
+				last_status = status;
 			}
 		}
 	}
@@ -264,7 +283,7 @@ CleanupExit:
 
 	NtClose (hdevice);
 
-	return status;
+	return is_flushed ? STATUS_SUCCESS : last_status;
 }
 
 VOID _app_memoryclean (
@@ -273,7 +292,7 @@ VOID _app_memoryclean (
 	_In_opt_ ULONG mask
 )
 {
-	WCHAR buffer_cleaned_result[0x100] = {0}, buffer_region[0x100] = {0}, buffer_result[0x100] = {0};
+	WCHAR buffer_cleaned_result[0x100] = {0}, buffer_region[0x100] = {0}, buffer_status[0x100] = {0}, buffer_result[0x100] = {0};
 	MEMORY_COMBINE_INFORMATION_EX combine_info_ex = {0};
 	SYSTEM_FILECACHE_INFORMATION sfci = {0};
 	SYSTEM_MEMORY_LIST_COMMAND command;
@@ -304,6 +323,9 @@ VOID _app_memoryclean (
 				if (hwnd)
 					_r_tray_popup (hwnd, &GUID_TrayIcon, flags, _r_app_getname (), _r_locale_getstring (IDS_STATUS_NOPRIVILEGES));
 			}
+
+			if (!hwnd)
+				_r_log (LOG_LEVEL_ERROR, NULL, L"_app_memoryclean", STATUS_PRIVILEGE_NOT_HELD, _r_locale_getstring (IDS_STATUS_NOPRIVILEGES));
 		}
 
 		return;
@@ -311,6 +333,8 @@ VOID _app_memoryclean (
 
 	if (mask == 0)
 		mask = _r_config_getulong (L"ReductMask2", REDUCT_MASK_DEFAULT, NULL);
+
+	mask &= REDUCT_MASK_ALL;
 
 	if (src == SOURCE_AUTO)
 	{
@@ -376,10 +400,21 @@ VOID _app_memoryclean (
 
 	StrTrimW (buffer_region, L"\r\n");
 
+	static BOOLEAN is_running = FALSE;
+
+	if (is_running)
+		return;
+
+	is_running = TRUE;
+
 	if (src == SOURCE_MANUAL)
 	{
 		if (!_r_show_confirmmessage (hwnd, _r_locale_getstring (IDS_QUESTION), buffer_region, L"IsShowReductConfirmation", FALSE))
+		{
+			is_running = FALSE;
+
 			return;
+		}
 	}
 
 	SetCursor (LoadCursorW (NULL, IDC_WAIT));
@@ -395,7 +430,7 @@ VOID _app_memoryclean (
 		status = NtSetSystemInformation (SystemMemoryListInformation, &command, sizeof (SYSTEM_MEMORY_LIST_COMMAND));
 
 		if (!NT_SUCCESS (status))
-			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", L"MemoryEmptyWorkingSets", status);
+			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"MemoryEmptyWorkingSets");
 	}
 
 	// System file cache
@@ -407,12 +442,17 @@ VOID _app_memoryclean (
 		status = NtSetSystemInformation (SystemFileCacheInformationEx, &sfci, sizeof (SYSTEM_FILECACHE_INFORMATION));
 
 		if (!NT_SUCCESS (status))
-			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", L"SystemFileCacheInformation", status);
+			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"SystemFileCacheInformation");
 	}
 
 	// Flush volume cache
 	if ((mask & REDUCT_MODIFIEDFILECACHE) == REDUCT_MODIFIEDFILECACHE)
-		_app_flushvolumecache ();
+	{
+		status = _app_flushvolumecache ();
+
+		if (!NT_SUCCESS (status))
+			_r_log (LOG_LEVEL_ERROR, NULL, L"_app_flushvolumecache", status, L"FlushFileBuffers");
+	}
 
 	// Modified page list (vista+)
 	if ((mask & REDUCT_MODIFIEDLIST) == REDUCT_MODIFIEDLIST)
@@ -422,7 +462,7 @@ VOID _app_memoryclean (
 		status = NtSetSystemInformation (SystemMemoryListInformation, &command, sizeof (SYSTEM_MEMORY_LIST_COMMAND));
 
 		if (!NT_SUCCESS (status))
-			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", L"MemoryFlushModifiedList", status);
+			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"MemoryFlushModifiedList");
 	}
 
 	// Standby list (vista+)
@@ -433,7 +473,7 @@ VOID _app_memoryclean (
 		status = NtSetSystemInformation (SystemMemoryListInformation, &command, sizeof (SYSTEM_MEMORY_LIST_COMMAND));
 
 		if (!NT_SUCCESS (status))
-			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", L"MemoryPurgeStandbyList", status);
+			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"MemoryPurgeStandbyList");
 	}
 
 	// Standby priority-0 list (vista+)
@@ -444,7 +484,7 @@ VOID _app_memoryclean (
 		status = NtSetSystemInformation (SystemMemoryListInformation, &command, sizeof (SYSTEM_MEMORY_LIST_COMMAND));
 
 		if (!NT_SUCCESS (status))
-			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", L"MemoryPurgeLowPriorityStandbyList", status);
+			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"MemoryPurgeLowPriorityStandbyList");
 	}
 
 	// Flush registry cache (win8.1+)
@@ -453,7 +493,7 @@ VOID _app_memoryclean (
 		status = NtSetSystemInformation (SystemRegistryReconciliationInformation, NULL, 0);
 
 		if (!NT_SUCCESS (status))
-			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", L"SystemRegistryReconciliationInformation", status);
+			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"SystemRegistryReconciliationInformation");
 	}
 
 	// Combine memory lists (win10+)
@@ -462,7 +502,7 @@ VOID _app_memoryclean (
 		status = NtSetSystemInformation (SystemCombinePhysicalMemoryInformation, &combine_info_ex, sizeof (MEMORY_COMBINE_INFORMATION_EX));
 
 		if (!NT_SUCCESS (status))
-			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", L"SystemCombinePhysicalMemoryInformation", status);
+			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"SystemCombinePhysicalMemoryInformation");
 	}
 
 	SetCursor (LoadCursorW (NULL, IDC_ARROW));
@@ -477,8 +517,8 @@ VOID _app_memoryclean (
 
 	_r_format_bytesize64 (buffer_cleaned_result, RTL_NUMBER_OF (buffer_cleaned_result), reduct_after);
 
-	_r_str_printf (buffer_result, RTL_NUMBER_OF (buffer_result), _r_locale_getstring (IDS_STATUS_CLEANED), buffer_cleaned_result);
-	_r_str_printf (buffer_result, RTL_NUMBER_OF (buffer_result), L"%s\r\n\r\n%s:\r\n%s", buffer_result, _r_locale_getstring (IDS_TITLE_3), buffer_region);
+	_r_str_printf (buffer_status, RTL_NUMBER_OF (buffer_status), _r_locale_getstring (IDS_STATUS_CLEANED), buffer_cleaned_result);
+	_r_str_printf (buffer_result, RTL_NUMBER_OF (buffer_result), L"%s\r\n\r\n%s:\r\n%s", buffer_status, _r_locale_getstring (IDS_TITLE_3), buffer_region);
 
 	if (src == SOURCE_CMDLINE)
 	{
@@ -499,7 +539,9 @@ VOID _app_memoryclean (
 	}
 
 	if (_r_config_getboolean (L"LogCleanResults", FALSE, NULL))
-		_r_log_v (LOG_LEVEL_INFO, NULL, _app_getcleanupreason (src), 0, buffer_cleaned_result);
+		_r_log_v (LOG_LEVEL_INFO, NULL, _app_getcleanupreason (src), 0, L"%s", buffer_cleaned_result);
+
+	is_running = FALSE;
 }
 
 VOID _app_fontinit (
@@ -2158,7 +2200,7 @@ INT_PTR CALLBACK DlgProc (
 							RTL_NUMBER_OF (limits_arr),
 							L"%" TEXT (PR_ULONG) L"%%",
 							_app_getlimitvalue (),
-							99,
+							100,
 							_r_config_getboolean (L"AutoreductEnable", FALSE, NULL)
 						);
 					}
@@ -2171,7 +2213,7 @@ INT_PTR CALLBACK DlgProc (
 							IDX_TRAY_POPUP_2,
 							intervals_arr,
 							RTL_NUMBER_OF (intervals_arr),
-							L"%" TEXT (PR_LONG64) L" min.",
+							L"%" TEXT (PR_ULONG) L" min.",
 							_app_getintervalvalue (),
 							1440,
 							_r_config_getboolean (L"AutoreductIntervalEnable", FALSE, NULL)
