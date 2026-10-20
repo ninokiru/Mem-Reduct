@@ -3,6 +3,8 @@
 
 #include "routine.h"
 
+#include <mountmgr.h>
+
 #include "main.h"
 #include "rapp.h"
 
@@ -42,7 +44,8 @@ VOID _app_generate_array (
 {
 	PR_HASHTABLE hashtable;
 	ULONG_PTR enum_key = 0;
-	ULONG hash_code, index = 0;
+	ULONG_PTR hash_code = 0;
+	ULONG index = 0;
 
 	RtlSecureZeroMemory (integers, sizeof (ULONG) * count);
 
@@ -64,14 +67,13 @@ VOID _app_generate_array (
 	while (_r_obj_enumhashtable (hashtable, NULL, &hash_code, &enum_key))
 	{
 		if (hash_code <= max_value)
-			integers[index] = hash_code;
+			integers[index] = (ULONG)hash_code;
 
 		if (++index >= count)
 			break;
 	}
 
-	if (qsort_s (integers, count, sizeof (ULONG), &compare_numbers, NULL) != 0)
-		_r_log (LOG_LEVEL_ERROR, NULL, L"qsort_s", STATUS_UNSUCCESSFUL, L"_app_generate_array");
+	qsort_s (integers, count, sizeof (ULONG), &compare_numbers, NULL);
 
 	_r_obj_dereference (hashtable);
 }
@@ -268,7 +270,7 @@ NTSTATUS _app_getvolumemountpoints (
 	NTSTATUS status;
 
 	buffer = NULL;
-	buffer_size = MOUNTMGR_QUERY_SIZE_DEFAULT;
+	buffer_size = _APP_MOUNTMGR_QUERY_SIZE_DEFAULT;
 
 	while (TRUE)
 	{
@@ -291,7 +293,7 @@ NTSTATUS _app_getvolumemountpoints (
 
 		if (status == STATUS_BUFFER_OVERFLOW || status == STATUS_BUFFER_TOO_SMALL || status == STATUS_INVALID_BUFFER_SIZE || status == STATUS_MORE_ENTRIES)
 		{
-			if (buffer_size >= MOUNTMGR_QUERY_SIZE_MAX)
+			if (buffer_size >= _APP_MOUNTMGR_QUERY_SIZE_MAX)
 				break;
 
 			buffer_size *= 2;
@@ -2150,7 +2152,7 @@ NTSTATUS NTAPI _app_update_thread (
 		goto CleanupExit;
 	}
 
-	_r_obj_initializestringref (&current_ref, _r_app_getversion ());
+	_r_obj_initializestringref (&current_ref, APP_VERSION);
 
 	if (_r_str_versioncompare (&current_ref, &version->sr) != -1)
 	{
@@ -2638,7 +2640,6 @@ INT_PTR CALLBACK DlgProc (
 				case WM_LBUTTONDOWN:
 				case WM_MBUTTONDOWN:
 				{
-					R_STRINGREF taskmgr_sr = PR_STRINGREF_INIT (L"taskmgr.exe");
 					LONG action;
 
 					if (LOWORD (lparam) == WM_MBUTTONDOWN)
@@ -2660,7 +2661,7 @@ INT_PTR CALLBACK DlgProc (
 
 						case 2:
 						{
-							_r_sys_createprocess (&taskmgr_sr, NULL, NULL, FALSE);
+							_r_sys_createprocess (L"taskmgr.exe", NULL, NULL, FALSE);
 							break;
 						}
 
