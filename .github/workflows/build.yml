@@ -1,0 +1,131 @@
+name: build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v.*']
+    paths-ignore: ['**.md', 'bin/i18n/**', 'images/**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  APP_NAME_SHORT: memreduct
+  APP_NAME: Mem Reduct
+
+jobs:
+  build:
+    runs-on: windows-2025-vs2026
+
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+        with:
+          path: memreduct
+
+      - name: Checkout routine
+        uses: actions/checkout@v4
+        with:
+          repository: henrypp/routine
+          path: routine
+
+      - name: Checkout builder
+        uses: actions/checkout@v4
+        with:
+          repository: henrypp/builder
+          path: builder
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $match = Select-String -Path memreduct/src/app.h -Pattern 'APP_VERSION\s+L"([0-9.]+)"' | Select-Object -First 1
+          if (-not $match) { Write-Error 'APP_VERSION not found in src/app.h'; exit 1 }
+          "version=$($match.Matches[0].Groups[1].Value)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+        with:
+          vs-version: '[18.0,19.0)'
+
+      - name: Build x64
+        shell: cmd
+        working-directory: memreduct
+        run: msbuild memreduct.sln -property:Configuration=Release -property:Platform=x64 -property:OutDir=bin\64\ -property:IntDir=obj\64\ -verbosity:minimal
+
+      - name: Build ARM64
+        shell: cmd
+        working-directory: memreduct
+        run: msbuild memreduct.sln -property:Configuration=Release -property:Platform=ARM64 -property:OutDir=bin\arm64\ -property:IntDir=obj\arm64\ -verbosity:minimal
+
+      - name: Show binaries
+        shell: pwsh
+        run: Get-ChildItem -Recurse memreduct/bin -Include *.exe, *.pdb | Select-Object FullName, Length
+
+      - name: Install packaging tools
+        shell: pwsh
+        run: |
+          choco install nsis --no-progress -y
+          "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Append
+          "C:\Program Files\7-Zip" | Out-File -FilePath $env:GITHUB_PATH -Append
+          pip install --quiet chardet
+
+      - name: Package
+        shell: pwsh
+        working-directory: builder
+        run: |
+          python src/build_package.py --name-short=$env:APP_NAME_SHORT --version=${{ steps.version.outputs.version }} --name="$env:APP_NAME"
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $desktop = Join-Path $env:USERPROFILE 'Desktop'
+          $version = '${{ steps.version.outputs.version }}'
+          foreach ($pattern in @("memreduct-$version-setup.exe", "memreduct-$version-bin.7z", "memreduct-$version.pdb.7z", "memreduct-$version.sha256")) {
+            $found = Get-ChildItem -Path $desktop -Filter $pattern -ErrorAction SilentlyContinue
+            if ($found) { Copy-Item $found.FullName dist/ -Force }
+          }
+          Get-ChildItem dist
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: memreduct-${{ steps.version.outputs.version }}-windows
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v.')
+    runs-on: windows-2025-vs2026
+
+    steps:
+      - name: Checkout application
+        uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $match = Select-String -Path src/app.h -Pattern 'APP_VERSION\s+L"([0-9.]+)"' | Select-Object -First 1
+          if (-not $match) { Write-Error 'APP_VERSION not found in src/app.h'; exit 1 }
+          "version=$($match.Matches[0].Groups[1].Value)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: memreduct-${{ steps.version.outputs.version }}-windows
+          path: dist
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$env:GITHUB_REF_NAME" --verify-tag --title "Mem Reduct ${{ steps.version.outputs.version }}" --generate-notes --latest (Get-ChildItem dist -File).FullName
