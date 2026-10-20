@@ -144,6 +144,30 @@ ULONG _app_getwarningvalue ()
 	return _r_calc_clamp (_r_config_getulong_ex (L"TrayLevelWarning", DEFAULT_WARNING_LEVEL, NULL), 0, 100);
 }
 
+FORCEINLINE BOOLEAN _app_update_isenabled ()
+{
+	return _r_config_getlong_ex (L"CheckUpdatesPeriod", UPDATE_CHECK_PERIOD, NULL) > 0;
+}
+
+VOID _app_update_enable (
+	_In_ BOOLEAN is_enable
+)
+{
+	_r_config_setlong_ex (L"CheckUpdatesPeriod", is_enable ? UPDATE_CHECK_PERIOD : 0, NULL);
+}
+
+BOOLEAN _app_update_isready ()
+{
+	LONG period;
+
+	period = _r_config_getlong_ex (L"CheckUpdatesPeriod", UPDATE_CHECK_PERIOD, NULL);
+
+	if (period <= 0)
+		return FALSE;
+
+	return (_r_unixtime_now () - _r_config_getlong64_ex (L"CheckUpdatesLast", 0, NULL)) > _r_calc_hours2seconds (period);
+}
+
 // spin buddies do not sync their text into the up-down position, so typed values must be read from the edit control
 LONG _app_edit_getnumber (
 	_In_ HWND hwnd,
@@ -1876,30 +1900,6 @@ INT_PTR CALLBACK SettingsProc (
 //
 
 static LONG update_isbusy = 0;
-
-FORCEINLINE BOOLEAN _app_update_isenabled ()
-{
-	return _r_config_getlong_ex (L"CheckUpdatesPeriod", UPDATE_CHECK_PERIOD, NULL) > 0;
-}
-
-VOID _app_update_enable (
-	_In_ BOOLEAN is_enable
-)
-{
-	_r_config_setlong_ex (L"CheckUpdatesPeriod", is_enable ? UPDATE_CHECK_PERIOD : 0, NULL);
-}
-
-BOOLEAN _app_update_isready ()
-{
-	LONG period;
-
-	period = _r_config_getlong_ex (L"CheckUpdatesPeriod", UPDATE_CHECK_PERIOD, NULL);
-
-	if (period <= 0)
-		return FALSE;
-
-	return (_r_unixtime_now () - _r_config_getlong64_ex (L"CheckUpdatesLast", 0, NULL)) > _r_calc_hours2seconds (period);
-}
 
 FORCEINLINE BOOLEAN _app_update_isvalidversion (
 	_In_ PR_STRINGREF version
