@@ -337,6 +337,8 @@ STRINGTABLE
 	IDS_MEMREGION_STANDBYLISTPRIORITY0 "Standby list (without priority)"
 	IDS_MEMREGION_REGISTRYCACHE "Registry cache"
 	IDS_MEMREGION_COMBINEMEMORYLISTS "Combine memory lists"
+
+	IDS_MINUTES "min"
 }
 
 //

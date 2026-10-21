@@ -16,6 +16,32 @@ v0.0.2 (21 October 2026)
 
 \- releases now carry two files only: setup .exe and portable .zip
 
+\- tray icon is now rendered with the system user interface font, ClearType and a colour that adapts to the warning and danger backgrounds
+
+\- tray icon badge scales the digits down so "100%" still fits inside the small icon
+
+\- application icon now contains 16 to 96 pixel sizes instead of a single stretched one
+
+\- fixed two crashes when the update server answered with a winhttp error code
+
+\- dark theme is now applied to the settings window when it is already open
+
+\- the interface now follows the windows light and dark theme switch without restarting the application
+
+\- the tray tooltip no longer resends an unchanged icon on every timer tick
+
+\- automatic cleanup ignores the "Disable" entry of the usage threshold submenu
+
+\- changing a setting no longer triggers an immediate automatic cleanup
+
+\- automatic cleanup no longer purges the standby and modified lists unless "Allow standby list cleanup" is enabled
+
+\- "-clean" command line switch now returns a real exit code and reports missing administrator rights
+
+\- the cleaning interval submenu and the memory region list are fully translated into Vietnamese
+
+\- removed the duplicated "(Language)" suffix from the language menu and settings title
+
 v0.0.1 (20 October 2026)
 
 \- first build of the fork, based on upstream v3.5.2

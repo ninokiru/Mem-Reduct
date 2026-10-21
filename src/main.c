@@ -13,6 +13,9 @@ STATIC_DATA config = {0};
 ULONG limits_arr[13] = {0};
 ULONG intervals_arr[13] = {0};
 
+// exit code reported to the console caller, only meaningful for command line mode
+INT cmdline_exit_code = ERROR_APP_INIT_FAILURE;
+
 INT WINAPIV compare_numbers (
 	_In_opt_ PVOID context,
 	_In_ LPCVOID ptr1,
@@ -329,6 +332,7 @@ VOID _app_memoryclean (
 	R_MEMORY_INFO mem_info;
 	ULONG64 reduct_after, reduct_before;
 	ULONG flags = NIIF_WARNING;
+	BOOLEAN is_failed = FALSE;
 	NTSTATUS status;
 
 	if (!_r_config_getboolean_ex (L"IsNotificationsSound", TRUE, NULL))
@@ -345,8 +349,9 @@ VOID _app_memoryclean (
 		{
 			if (src == SOURCE_CMDLINE)
 			{
-				if (hwnd)
-					_r_show_message (hwnd, MB_OK | MB_ICONSTOP, _r_app_getname (), _r_locale_getstring (IDS_STATUS_NOPRIVILEGES));
+				_r_show_message (hwnd, MB_OK | MB_ICONSTOP, _r_app_getname (), _r_locale_getstring (IDS_STATUS_NOPRIVILEGES));
+
+				cmdline_exit_code = 1;
 			}
 			else
 			{
@@ -369,7 +374,7 @@ VOID _app_memoryclean (
 	if (src == SOURCE_AUTO)
 	{
 		if (!_r_config_getboolean_ex (L"IsAllowStandbyListCleanup", FALSE, NULL))
-			mask &= ~REDUCT_MASK_FREEZES; // exclude freezes from autoclean feature ;)
+			mask &= ~(REDUCT_MASK_FREEZES | REDUCT_STANDBYPRIORITY0LIST); // exclude the purges that stall disk activity from autoclean
 	}
 
 	if ((mask & REDUCT_WORKINGSET) == REDUCT_WORKINGSET)
@@ -460,7 +465,10 @@ VOID _app_memoryclean (
 		status = NtSetSystemInformation (SystemMemoryListInformation, &command, sizeof (SYSTEM_MEMORY_LIST_COMMAND));
 
 		if (!NT_SUCCESS (status))
+		{
 			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"MemoryEmptyWorkingSets");
+			is_failed = TRUE;
+		}
 	}
 
 	// System file cache
@@ -472,7 +480,10 @@ VOID _app_memoryclean (
 		status = NtSetSystemInformation (SystemFileCacheInformationEx, &sfci, sizeof (SYSTEM_FILECACHE_INFORMATION));
 
 		if (!NT_SUCCESS (status))
+		{
 			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"SystemFileCacheInformation");
+			is_failed = TRUE;
+		}
 	}
 
 	// Flush volume cache
@@ -481,7 +492,10 @@ VOID _app_memoryclean (
 		status = _app_flushvolumecache ();
 
 		if (!NT_SUCCESS (status))
+		{
 			_r_log (LOG_LEVEL_ERROR, NULL, L"_app_flushvolumecache", status, L"FlushFileBuffers");
+			is_failed = TRUE;
+		}
 	}
 
 	// Modified page list (vista+)
@@ -492,7 +506,10 @@ VOID _app_memoryclean (
 		status = NtSetSystemInformation (SystemMemoryListInformation, &command, sizeof (SYSTEM_MEMORY_LIST_COMMAND));
 
 		if (!NT_SUCCESS (status))
+		{
 			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"MemoryFlushModifiedList");
+			is_failed = TRUE;
+		}
 	}
 
 	// Standby list (vista+)
@@ -503,7 +520,10 @@ VOID _app_memoryclean (
 		status = NtSetSystemInformation (SystemMemoryListInformation, &command, sizeof (SYSTEM_MEMORY_LIST_COMMAND));
 
 		if (!NT_SUCCESS (status))
+		{
 			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"MemoryPurgeStandbyList");
+			is_failed = TRUE;
+		}
 	}
 
 	// Standby priority-0 list (vista+)
@@ -514,7 +534,10 @@ VOID _app_memoryclean (
 		status = NtSetSystemInformation (SystemMemoryListInformation, &command, sizeof (SYSTEM_MEMORY_LIST_COMMAND));
 
 		if (!NT_SUCCESS (status))
+		{
 			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"MemoryPurgeLowPriorityStandbyList");
+			is_failed = TRUE;
+		}
 	}
 
 	// Flush registry cache
@@ -523,7 +546,10 @@ VOID _app_memoryclean (
 		status = NtSetSystemInformation (SystemRegistryReconciliationInformation, NULL, 0);
 
 		if (!NT_SUCCESS (status))
+		{
 			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"SystemRegistryReconciliationInformation");
+			is_failed = TRUE;
+		}
 	}
 
 	// Combine memory lists
@@ -532,7 +558,10 @@ VOID _app_memoryclean (
 		status = NtSetSystemInformation (SystemCombinePhysicalMemoryInformation, &combine_info_ex, sizeof (MEMORY_COMBINE_INFORMATION_EX));
 
 		if (!NT_SUCCESS (status))
+		{
 			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"SystemCombinePhysicalMemoryInformation");
+			is_failed = TRUE;
+		}
 	}
 
 	SetCursor (LoadCursorW (NULL, IDC_ARROW));
@@ -566,6 +595,9 @@ VOID _app_memoryclean (
 	if (_r_config_getboolean_ex (L"LogCleanResults", FALSE, NULL))
 		_r_log_v (LOG_LEVEL_INFO, NULL, _app_getcleanupreason (src), 0, L"%s", buffer_cleaned_result);
 
+	if (src == SOURCE_CMDLINE)
+		cmdline_exit_code = is_failed ? 1 : ERROR_SUCCESS;
+
 	is_running = FALSE;
 }
 
@@ -576,7 +608,7 @@ VOID _app_fontinit (
 {
 	RtlZeroMemory (logfont, sizeof (LOGFONT));
 
-	_r_str_copy (logfont->lfFaceName, LF_FACESIZE, L"Lucida Console");
+	_r_str_copy (logfont->lfFaceName, LF_FACESIZE, L"Segoe UI");
 
 	logfont->lfHeight = _r_dc_fontsizetoheight (8, dpi_value);
 	logfont->lfWeight = FW_NORMAL;
@@ -584,7 +616,7 @@ VOID _app_fontinit (
 	_r_config_getfont_ex (L"TrayFont", logfont, dpi_value, NULL);
 
 	logfont->lfCharSet = DEFAULT_CHARSET;
-	logfont->lfQuality = _r_config_getboolean_ex (L"TrayUseAntialiasing", FALSE, NULL) ? CLEARTYPE_QUALITY : NONANTIALIASED_QUALITY;
+	logfont->lfQuality = _r_config_getboolean_ex (L"TrayUseAntialiasing", TRUE, NULL) ? CLEARTYPE_QUALITY : NONANTIALIASED_QUALITY;
 }
 
 VOID _app_drawbackground (
@@ -637,11 +669,15 @@ HICON _app_iconcreate (
 	R_MEMORY_INFO mem_info;
 	WCHAR icon_text[0x08];
 	ICONINFO ii = {0};
+	LOGFONT logfont;
 	R_STRINGREF sr;
 	HGDIOBJ prev_bmp, prev_font;
 	HICON hicon_new;
+	HFONT hfont_fit = NULL;
 	COLORREF bg_color, text_color;
 	INT prev_mode;
+	LONG max_width;
+	LONG text_width;
 	BOOLEAN is_border, is_round, is_transparent, has_danger;
 
 	if (!config.hdc || !config.hdc_mask || !config.hbitmap || !config.hbitmap_mask || !config.hfont)
@@ -670,6 +706,9 @@ HICON _app_iconcreate (
 			bg_color = has_danger ? _r_config_getulong_ex (L"TrayColorDanger", TRAY_COLOR_DANGER, NULL) : _r_config_getulong_ex (L"TrayColorWarning", TRAY_COLOR_WARNING, NULL);
 
 			is_transparent = FALSE;
+
+			// warning and danger colours are user provided, so pick whichever digit colour stays readable on them
+			text_color = _r_dc_getcolorbrightness (bg_color);
 		}
 		else
 		{
@@ -687,6 +726,21 @@ HICON _app_iconcreate (
 	prev_font = SelectObject (config.hdc, config.hfont);
 	prev_mode = SetBkMode (config.hdc, TRANSPARENT);
 
+	// the badge is a dozen pixels wide, so shrink the digits until they really fit inside it
+	max_width = config.icon_size.right - 2;
+	text_width = _r_dc_getfontwidth (config.hdc, &sr, NULL);
+
+	if (text_width > max_width && GetObjectW (config.hfont, sizeof (LOGFONT), &logfont))
+	{
+		logfont.lfHeight = MulDiv (logfont.lfHeight, max_width, text_width);
+		logfont.lfWidth = 0;
+
+		hfont_fit = CreateFontIndirectW (&logfont);
+
+		if (hfont_fit)
+			SelectObject (config.hdc, hfont_fit);
+	}
+
 	_app_drawbackground (config.hdc, bg_color, is_border ? text_color : bg_color, is_transparent ? text_color : bg_color, &config.icon_size, is_round);
 
 	_r_dc_drawtext (NULL, config.hdc, &sr, &config.icon_size, 0, 0, DT_VCENTER | DT_CENTER | DT_SINGLELINE | DT_NOCLIP | DT_NOPREFIX, text_color);
@@ -698,7 +752,7 @@ HICON _app_iconcreate (
 
 	// draw mask device context
 	prev_bmp = SelectObject (config.hdc_mask, config.hbitmap_mask);
-	prev_font = SelectObject (config.hdc_mask, config.hfont);
+	prev_font = SelectObject (config.hdc_mask, hfont_fit ? hfont_fit : config.hfont);
 	prev_mode = SetBkMode (config.hdc_mask, TRANSPARENT);
 
 	_app_drawbackground (config.hdc_mask, TRAY_COLOR_WHITE, is_border ? TRAY_COLOR_BLACK : TRAY_COLOR_WHITE, is_transparent ? TRAY_COLOR_WHITE : TRAY_COLOR_BLACK, &config.icon_size, is_round);
@@ -716,6 +770,9 @@ HICON _app_iconcreate (
 	ii.fIcon = TRUE;
 
 	hicon_new = CreateIconIndirect (&ii);
+
+	if (hfont_fit)
+		DeleteObject (hfont_fit);
 
 	if (!hicon_new)
 		return config.hicon;
@@ -738,6 +795,7 @@ VOID CALLBACK _app_timercallback (
 	HICON hicon = NULL;
 	HICON hicon_prev = NULL;
 	LONG64 timestamp;
+	ULONG limit_value;
 	ULONG percent;
 	BOOLEAN is_clean = FALSE;
 
@@ -746,12 +804,15 @@ VOID CALLBACK _app_timercallback (
 
 	_app_getmemoryinfo (&mem_info);
 
-	// autocleanup functional
-	if (_r_sys_iselevated ())
+	// autocleanup functional (settings and dpi changes reuse this routine, they must not trigger a clean)
+	if (msg == WM_TIMER && _r_sys_iselevated ())
 	{
 		if (_r_config_getboolean_ex (L"AutoreductEnable", FALSE, NULL))
 		{
-			if (mem_info.physical_memory.percent >= _app_getlimitvalue ())
+			limit_value = _app_getlimitvalue ();
+
+			// 0 is the "Disable" entry of the tray submenu, not a threshold to compare against
+			if (limit_value != 0 && mem_info.physical_memory.percent >= limit_value)
 			{
 				// cooldown prevents cleaning loop when memory usage stays above the limit (issue #191)
 				timestamp = _r_unixtime_now () - _r_config_getlong64_ex (L"StatisticLastReduct", 0, NULL);
@@ -784,7 +845,8 @@ VOID CALLBACK _app_timercallback (
 	}
 	else
 	{
-		hicon = config.hicon;
+		// the icon did not change, so only the tooltip is sent to the tray
+		hicon = NULL;
 	}
 
 	_r_tray_setinfoformat (
@@ -922,6 +984,25 @@ VOID _app_iconinit (
 
 		_r_log (LOG_LEVEL_ERROR, NULL, L"_app_iconinit", STATUS_NO_MEMORY, L"Could not create tray icon drawing surfaces");
 	}
+}
+
+VOID _app_trayiconrefresh (
+	_In_ HWND hwnd
+)
+{
+	HICON hicon_prev;
+
+	hicon_prev = config.hicon;
+
+	_app_iconinit (_r_dc_gettaskbardpi ());
+
+	_r_tray_create (hwnd, &GUID_TrayIcon, RM_TRAYICON, _app_iconcreate (0), _r_app_getname (), FALSE);
+
+	// the tray has taken the new icon, the one built for the previous dpi is not required anymore
+	if (hicon_prev && hicon_prev != config.hicon)
+		DestroyIcon (hicon_prev);
+
+	_app_iconredraw (hwnd);
 }
 
 VOID _app_hotkeyinit (
@@ -1077,7 +1158,7 @@ INT_PTR CALLBACK SettingsProc (
 					_r_ctrl_checkbutton (hwnd, IDC_TRAYSHOWBORDER_CHK, _r_config_getboolean_ex (L"TrayShowBorder", FALSE, NULL));
 					_r_ctrl_checkbutton (hwnd, IDC_TRAYROUNDCORNERS_CHK, _r_config_getboolean_ex (L"TrayRoundCorners", FALSE, NULL));
 					_r_ctrl_checkbutton (hwnd, IDC_TRAYCHANGEBG_CHK, _r_config_getboolean_ex (L"TrayChangeBg", TRUE, NULL));
-					_r_ctrl_checkbutton (hwnd, IDC_TRAYUSEANTIALIASING_CHK, _r_config_getboolean_ex (L"TrayUseAntialiasing", FALSE, NULL));
+					_r_ctrl_checkbutton (hwnd, IDC_TRAYUSEANTIALIASING_CHK, _r_config_getboolean_ex (L"TrayUseAntialiasing", TRUE, NULL));
 
 					dpi_value = _r_dc_gettaskbardpi ();
 
@@ -1132,7 +1213,7 @@ INT_PTR CALLBACK SettingsProc (
 
 			// localize titles
 			_r_ctrl_setstringformat (hwnd, IDC_TITLE_1, L"%s:", _r_locale_getstring (IDS_TITLE_1));
-			_r_ctrl_setstringformat (hwnd, IDC_TITLE_2, L"%s: (Language)", _r_locale_getstring (IDS_TITLE_2));
+			_r_ctrl_setstringformat (hwnd, IDC_TITLE_2, L"%s:", _r_locale_getstring (IDS_TITLE_2));
 			_r_ctrl_setstringformat (hwnd, IDC_TITLE_3, L"%s:", _r_locale_getstring (IDS_TITLE_3));
 			_r_ctrl_setstringformat (hwnd, IDC_TITLE_4, L"%s:", _r_locale_getstring (IDS_TITLE_4));
 			_r_ctrl_setstringformat (hwnd, IDC_TITLE_5, L"%s:", _r_locale_getstring (IDS_TITLE_5));
@@ -1846,7 +1927,20 @@ NTSTATUS _app_update_query (
 	status = _r_inet_begindownload (hsession, &manifest_url->sr, &download_info);
 
 	if (status != STATUS_SUCCESS)
+	{
+		_r_log (LOG_LEVEL_WARNING, NULL, L"_r_inet_begindownload", status, UPDATE_MANIFEST_URL);
+
+		// winhttp reports positive error codes, which NT_SUCCESS would read as success
+		status = STATUS_UNSUCCESSFUL;
+
 		goto CleanupExit;
+	}
+
+	if (!download_info.string)
+	{
+		status = STATUS_DATA_ERROR;
+		goto CleanupExit;
+	}
 
 	// manifest format: "name=version|url;name=version|url;"
 	string_table = _r_str_unserialize (&download_info.string->sr, L';', L'=');
@@ -1911,6 +2005,9 @@ NTSTATUS _app_update_query (
 
 CleanupExit:
 
+	if (value)
+		_r_obj_dereference (value);
+
 	if (string_table)
 		_r_obj_dereference (string_table);
 
@@ -1973,7 +2070,14 @@ NTSTATUS _app_update_downloadinstaller (
 	_r_inet_destroydownload (&download_info);
 
 	if (status != STATUS_SUCCESS)
+	{
+		_r_log (LOG_LEVEL_WARNING, NULL, L"_r_inet_begindownload", status, url->buffer);
+
+		// winhttp reports positive error codes, which NT_SUCCESS would read as success
+		status = STATUS_UNSUCCESSFUL;
+
 		goto CleanupExit;
+	}
 
 	// verify the payload really is an executable and not an error response
 	file_size = 0;
@@ -2111,8 +2215,9 @@ NTSTATUS NTAPI _app_update_thread (
 
 	if (is_launched)
 	{
-		// leave the way free for the installer
-		PostMessageW (task.hwnd, WM_COMMAND, IDM_EXIT, 0);
+		// leave the way free for the installer (the window is gone when the user already quit)
+		if (IsWindow (task.hwnd))
+			PostMessageW (task.hwnd, WM_COMMAND, IDM_EXIT, 0);
 	}
 	else
 	{
@@ -2291,6 +2396,14 @@ INT_PTR CALLBACK DlgProc (
 
 			_r_tray_destroy (hwnd, &GUID_TrayIcon);
 
+			// the tray does not own this icon, it is the one created by _app_iconcreate
+			if (config.hicon)
+			{
+				DestroyIcon (config.hicon);
+
+				config.hicon = NULL;
+			}
+
 			SAFE_DELETE_OBJECT (config.hbitmap_mask);
 			SAFE_DELETE_OBJECT (config.hbitmap);
 			SAFE_DELETE_OBJECT (config.hfont);
@@ -2323,11 +2436,7 @@ INT_PTR CALLBACK DlgProc (
 					_r_menu_enableitem (hmenu, IDM_SKIPUACWARNING_CHK, FALSE, FALSE);
 			}
 
-			_app_iconinit (_r_dc_gettaskbardpi ());
-
-			_r_tray_create (hwnd, &GUID_TrayIcon, RM_TRAYICON, _app_iconcreate (0), _r_app_getname (), FALSE);
-
-			_app_iconredraw (hwnd);
+			_app_trayiconrefresh (hwnd);
 
 			break;
 		}
@@ -2345,11 +2454,7 @@ INT_PTR CALLBACK DlgProc (
 
 		case RM_TASKBARCREATED:
 		{
-			_app_iconinit (_r_dc_gettaskbardpi ());
-
-			_r_tray_create (hwnd, &GUID_TrayIcon, RM_TRAYICON, _app_iconcreate (0), _r_app_getname (), FALSE);
-
-			_app_iconredraw (hwnd);
+			_app_trayiconrefresh (hwnd);
 
 			break;
 		}
@@ -2377,7 +2482,7 @@ INT_PTR CALLBACK DlgProc (
 				_r_menu_setitemtext (hmenu, IDM_REDUCTCONFIRMATION_CHK, FALSE, _r_locale_getstring (IDS_REDUCTCONFIRMATION_CHK));
 				_r_menu_setitemtext (hmenu, IDM_SKIPUACWARNING_CHK, FALSE, _r_locale_getstring (IDS_SKIPUACWARNING_CHK));
 				_r_menu_setitemtext (hmenu, IDM_CHECKUPDATES_CHK, FALSE, _r_locale_getstring (IDS_CHECKUPDATES_CHK));
-				_r_menu_setitemtextformat (GetSubMenu (hmenu, LANG_SUBMENU), LANG_MENU, TRUE, L"%s (Language)", _r_locale_getstring (IDS_LANGUAGE));
+				_r_menu_setitemtext (GetSubMenu (hmenu, LANG_SUBMENU), LANG_MENU, TRUE, _r_locale_getstring (IDS_LANGUAGE));
 				_r_menu_setitemtext (hmenu, IDM_WEBSITE, FALSE, _r_locale_getstring (IDS_WEBSITE));
 				_r_menu_setitemtext (hmenu, IDM_CHECKUPDATES, FALSE, _r_locale_getstring (IDS_CHECKUPDATES));
 				_r_menu_setitemtextformat (hmenu, IDM_ABOUT, FALSE, L"%s\tF1", _r_locale_getstring (IDS_ABOUT));
@@ -2413,6 +2518,33 @@ INT_PTR CALLBACK DlgProc (
 
 			if (!_r_sys_iselevated ())
 				_r_ctrl_setbuttonmargins (hwnd, IDC_CLEAN, LOWORD (wparam));
+
+			break;
+		}
+
+		case WM_SETTINGCHANGE:
+		{
+			HWND hsettings;
+			R_STRINGREF sr;
+			LPWSTR type;
+
+			// routine refreshed the immersive colour policy for us, the windows are repainted to follow it
+			type = (LPWSTR)lparam;
+
+			if (!type)
+				break;
+
+			_r_obj_initializestringref (&sr, type);
+
+			if (_r_str_isequal2 (&sr, L"ImmersiveColorSet", TRUE))
+			{
+				_r_theme_initialize (hwnd, _r_theme_isenabled ());
+
+				hsettings = _r_settings_getwindow ();
+
+				if (hsettings)
+					_r_theme_initialize (hsettings, _r_theme_isenabled ());
+			}
 
 			break;
 		}
@@ -2602,6 +2734,7 @@ INT_PTR CALLBACK DlgProc (
 				case WM_CONTEXTMENU:
 				{
 					HMENU hmenu, hsubmenu, hsubmenu_interval, hsubmenu_limit, hsubmenu_region;
+					PR_STRING format_interval;
 					ULONG mask;
 
 					SetForegroundWindow (hwnd); // don't touch
@@ -2686,16 +2819,20 @@ INT_PTR CALLBACK DlgProc (
 					// configure submenu #3
 					if (hsubmenu_interval)
 					{
+						format_interval = _r_obj_concatstrings (2, L"%" TEXT (PR_ULONG) L" ", _r_locale_getstring (IDS_MINUTES));
+
 						_app_generate_menu (
 							hsubmenu_interval,
 							IDX_TRAY_POPUP_2,
 							intervals_arr,
 							RTL_NUMBER_OF (intervals_arr),
-							L"%" TEXT (PR_ULONG) L" min.",
+							format_interval->buffer,
 							_app_getintervalvalue (),
 							1440,
 							_r_config_getboolean_ex (L"AutoreductIntervalEnable", FALSE, NULL)
 						);
+
+						_r_obj_dereference (format_interval);
 					}
 
 					_r_menu_popup (hsubmenu, hwnd, NULL, 0);
@@ -2790,9 +2927,17 @@ INT_PTR CALLBACK DlgProc (
 
 				case IDM_USEDARKTHEME:
 				{
+					HWND hsettings;
 					BOOLEAN is_enabled = !_r_theme_isenabled ();
 
 					_r_theme_enable (hwnd, is_enabled);
+
+					// the settings page is a separate window, routine does not repaint it for us
+					hsettings = _r_settings_getwindow ();
+
+					if (hsettings)
+						_r_theme_initialize (hsettings, is_enabled);
+
 					_r_menu_checkitem (GetMenu (hwnd), ctrl_id, 0, MF_BYCOMMAND, is_enabled);
 
 					break;
@@ -3083,6 +3228,8 @@ BOOLEAN NTAPI _app_parseargs (
 		{
 			_r_show_message (NULL, MB_OK | MB_ICONINFORMATION, NULL, L"Available options for memreduct.exe:\r\n\r\n-clean - clear default memory regions\r\n" "-clean:full - clear all memory regions");
 
+			cmdline_exit_code = ERROR_SUCCESS;
+
 			return TRUE;
 		}
 	}
@@ -3100,7 +3247,7 @@ INT APIENTRY wWinMain (
 	HWND hwnd;
 
 	if (!_r_app_initialize (&_app_parseargs))
-		return ERROR_APP_INIT_FAILURE;
+		return cmdline_exit_code;
 
 	hwnd = _r_app_createwindow (hinst, MAKEINTRESOURCEW (IDD_MAIN), MAKEINTRESOURCEW (IDI_MAIN), &DlgProc);
 
