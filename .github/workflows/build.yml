@@ -20,7 +20,7 @@ jobs:
   build:
     permissions:
       contents: read
-      artifacts: write
+      actions: write
     runs-on: windows-2025-vs2026
 
     steps:
