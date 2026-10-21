@@ -39,9 +39,6 @@ DEFINE_GUID (GUID_TrayIcon, 0xAE9053F0, 0x8D59, 0x4803, 0x9A, 0xBB, 0x74, 0xAF, 
 // setup.exe is ~2MB; reject anything smaller (error page / truncated download)
 #define UPDATE_MINIMUM_FILE_SIZE 0x40000
 
-#define _APP_MOUNTMGR_QUERY_SIZE_DEFAULT 0x1000
-#define _APP_MOUNTMGR_QUERY_SIZE_MAX 0x100000
-
 #define DEFAULT_DANGER_LEVEL 90
 #define DEFAULT_WARNING_LEVEL 70
 

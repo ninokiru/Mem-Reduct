@@ -3,8 +3,6 @@
 
 #include "routine.h"
 
-#include <mountmgr.h>
-
 #include "main.h"
 #include "rapp.h"
 
@@ -258,160 +256,56 @@ BOOLEAN _app_config_invertboolean (
 }
 
 _Success_ (NT_SUCCESS (return))
-NTSTATUS _app_getvolumemountpoints (
-	_Out_ PVOID_PTR out_buffer,
-	_In_ HANDLE hdevice
-)
-{
-	PMOUNTMGR_MOUNT_POINTS buffer;
-	MOUNTMGR_MOUNT_POINT query = {0};
-	ULONG_PTR return_length;
-	ULONG buffer_size;
-	NTSTATUS status;
-
-	buffer = NULL;
-	buffer_size = _APP_MOUNTMGR_QUERY_SIZE_DEFAULT;
-
-	while (TRUE)
-	{
-		_r_mem_free (buffer);
-
-		buffer = _r_mem_allocate (buffer_size);
-		buffer->Size = buffer_size;
-
-		return_length = 0;
-
-		status = _r_fs_deviceiocontrol (
-			hdevice,
-			IOCTL_MOUNTMGR_QUERY_POINTS,
-			&query,
-			sizeof (query),
-			buffer,
-			buffer_size,
-			&return_length
-		);
-
-		if (status == STATUS_BUFFER_OVERFLOW || status == STATUS_BUFFER_TOO_SMALL || status == STATUS_INVALID_BUFFER_SIZE || status == STATUS_MORE_ENTRIES)
-		{
-			if (buffer_size >= _APP_MOUNTMGR_QUERY_SIZE_MAX)
-				break;
-
-			buffer_size *= 2;
-
-			continue;
-		}
-
-		if (!NT_SUCCESS (status))
-			break;
-
-		*out_buffer = buffer;
-
-		return STATUS_SUCCESS;
-	}
-
-	_r_mem_free (buffer);
-
-	*out_buffer = NULL;
-
-	return status;
-}
-
 NTSTATUS _app_flushvolumecache ()
 {
-	PMOUNTMGR_MOUNT_POINTS object_mountpoints;
-	PMOUNTMGR_MOUNT_POINT mountpoint;
-	OBJECT_ATTRIBUTES oa = {0};
-	IO_STATUS_BLOCK isb;
-	UNICODE_STRING us;
-	HANDLE hdevice, hvolume;
-	NTSTATUS last_status = STATUS_SUCCESS;
+	WCHAR volume_name[0x100];
+	R_STRINGREF path_ref;
+	ULONG_PTR length;
+	HANDLE hvolume;
+	HANDLE hfind;
+	NTSTATUS last_status = STATUS_NOT_FOUND;
 	NTSTATUS status;
 	BOOLEAN is_flushed = FALSE;
 
-	RtlInitUnicodeString (&us, MOUNTMGR_DEVICE_NAME);
+	hfind = FindFirstVolumeW (volume_name, RTL_NUMBER_OF (volume_name));
 
-	InitializeObjectAttributes (&oa, &us, OBJ_CASE_INSENSITIVE, NULL, NULL);
+	if (hfind == INVALID_HANDLE_VALUE)
+		return STATUS_NOT_FOUND;
 
-	status = NtCreateFile (
-		&hdevice,
-		FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-		&oa,
-		&isb,
-		NULL,
-		FILE_ATTRIBUTE_NORMAL,
-		FILE_SHARE_READ | FILE_SHARE_WRITE,
-		FILE_OPEN,
-		FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
-		NULL,
-		0
-	);
-
-	if (!NT_SUCCESS (status))
-		return status;
-
-	status = _app_getvolumemountpoints ((PVOID_PTR)&object_mountpoints, hdevice);
-
-	if (!NT_SUCCESS (status))
-		goto CleanupExit;
-
-	for (ULONG i = 0; i < object_mountpoints->NumberOfMountPoints; i++)
+	do
 	{
-		mountpoint = &object_mountpoints->MountPoints[i];
+		// strip the trailing backslash, so we open the volume device and not its root directory
+		length = _r_str_getlength (volume_name);
 
-		if (mountpoint->SymbolicLinkNameLength < sizeof (UNICODE_NULL) || (mountpoint->SymbolicLinkNameLength % sizeof (UNICODE_NULL)) != 0)
-			continue;
+		if (length != 0 && volume_name[length - 1] == L'\\')
+			volume_name[length - 1] = UNICODE_NULL;
 
-		us.Length = (USHORT)mountpoint->SymbolicLinkNameLength;
-		us.MaximumLength = (USHORT)(mountpoint->SymbolicLinkNameLength + sizeof (UNICODE_NULL));
-		us.Buffer = PTR_ADD_OFFSET (object_mountpoints, mountpoint->SymbolicLinkNameOffset);
+		_r_obj_initializestringref (&path_ref, volume_name);
 
-		if (MOUNTMGR_IS_VOLUME_NAME (&us)) // \\??\\Volume{1111-2222}
+		status = _r_fs_createfile (&path_ref, FILE_OPEN, FILE_WRITE_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, 0, 0, FALSE, NULL, &hvolume);
+
+		if (!NT_SUCCESS (status))
 		{
-			InitializeObjectAttributes (&oa, &us, OBJ_CASE_INSENSITIVE, NULL, NULL);
+			last_status = status;
+			continue;
+		}
 
-			status = NtCreateFile (
-				&hvolume,
-				FILE_WRITE_DATA | SYNCHRONIZE,
-				&oa,
-				&isb,
-				NULL,
-				FILE_ATTRIBUTE_NORMAL,
-				FILE_SHARE_READ | FILE_SHARE_WRITE,
-				FILE_OPEN,
-				FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
-				NULL,
-				0
-			);
+		status = _r_fs_flushfile (hvolume);
 
-			if (NT_SUCCESS (status))
-			{
-				status = _r_fs_flushfile (hvolume);
+		NtClose (hvolume);
 
-				NtClose (hvolume);
-
-				if (NT_SUCCESS (status))
-				{
-					is_flushed = TRUE;
-				}
-				else
-				{
-					_r_log (LOG_LEVEL_ERROR, NULL, L"_app_flushvolumecache", status, L"FlushFileBuffers");
-
-					last_status = status;
-				}
-			}
-			else
-			{
-				last_status = status;
-			}
+		if (!NT_SUCCESS (status))
+		{
+			last_status = status;
+		}
+		else
+		{
+			is_flushed = TRUE;
 		}
 	}
+	while (FindNextVolumeW (hfind, volume_name, RTL_NUMBER_OF (volume_name)));
 
-	_r_mem_free (object_mountpoints);
-
-CleanupExit:
-
-	NtClose (hdevice);
+	FindVolumeClose (hfind);
 
 	return is_flushed ? STATUS_SUCCESS : last_status;
 }
