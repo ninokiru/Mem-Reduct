@@ -287,6 +287,9 @@ NTSTATUS _app_flushvolumecache ()
 		if (!NT_SUCCESS (status))
 		{
 			last_status = status;
+
+			_r_log (LOG_LEVEL_ERROR, NULL, L"_app_flushvolumecache", status, volume_name);
+
 			continue;
 		}
 
@@ -297,6 +300,8 @@ NTSTATUS _app_flushvolumecache ()
 		if (!NT_SUCCESS (status))
 		{
 			last_status = status;
+
+			_r_log (LOG_LEVEL_ERROR, NULL, L"_app_flushvolumecache", status, volume_name);
 		}
 		else
 		{
@@ -307,6 +312,7 @@ NTSTATUS _app_flushvolumecache ()
 
 	FindVolumeClose (hfind);
 
+	// read-only or locked volumes are normal on a running system, so flushing one volume is enough to succeed
 	return is_flushed ? STATUS_SUCCESS : last_status;
 }
 
@@ -411,14 +417,14 @@ VOID _app_memoryclean (
 	if ((mask & REDUCT_REGISTRYCACHE) == REDUCT_REGISTRYCACHE)
 	{
 		_r_str_append (buffer_region, RTL_NUMBER_OF (buffer_region), L"- ");
-		_r_str_appendformat (buffer_region, RTL_NUMBER_OF (buffer_region), L"%s (win8.1+)", _r_locale_getstring (IDS_MEMREGION_REGISTRYCACHE));
+		_r_str_append (buffer_region, RTL_NUMBER_OF (buffer_region), _r_locale_getstring (IDS_MEMREGION_REGISTRYCACHE));
 		_r_str_append (buffer_region, RTL_NUMBER_OF (buffer_region), L"\r\n");
 	}
 
 	if ((mask & REDUCT_COMBINEMEMORYLISTS) == REDUCT_COMBINEMEMORYLISTS)
 	{
 		_r_str_append (buffer_region, RTL_NUMBER_OF (buffer_region), L"- ");
-		_r_str_appendformat (buffer_region, RTL_NUMBER_OF (buffer_region), L"%s (win10+)", _r_locale_getstring (IDS_MEMREGION_COMBINEMEMORYLISTS));
+		_r_str_append (buffer_region, RTL_NUMBER_OF (buffer_region), _r_locale_getstring (IDS_MEMREGION_COMBINEMEMORYLISTS));
 		_r_str_append (buffer_region, RTL_NUMBER_OF (buffer_region), L"\r\n");
 	}
 
@@ -511,8 +517,8 @@ VOID _app_memoryclean (
 			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"MemoryPurgeLowPriorityStandbyList");
 	}
 
-	// Flush registry cache (win8.1+)
-	if (_r_sys_isosversiongreaterorequal (WINDOWS_8_1) && (mask & REDUCT_REGISTRYCACHE) == REDUCT_REGISTRYCACHE)
+	// Flush registry cache
+	if ((mask & REDUCT_REGISTRYCACHE) == REDUCT_REGISTRYCACHE)
 	{
 		status = NtSetSystemInformation (SystemRegistryReconciliationInformation, NULL, 0);
 
@@ -520,8 +526,8 @@ VOID _app_memoryclean (
 			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"SystemRegistryReconciliationInformation");
 	}
 
-	// Combine memory lists (win10+)
-	if (_r_sys_isosversiongreaterorequal (WINDOWS_10) && (mask & REDUCT_COMBINEMEMORYLISTS) == REDUCT_COMBINEMEMORYLISTS)
+	// Combine memory lists
+	if ((mask & REDUCT_COMBINEMEMORYLISTS) == REDUCT_COMBINEMEMORYLISTS)
 	{
 		status = NtSetSystemInformation (SystemCombinePhysicalMemoryInformation, &combine_info_ex, sizeof (MEMORY_COMBINE_INFORMATION_EX));
 
@@ -1003,16 +1009,14 @@ INT_PTR CALLBACK SettingsProc (
 					_r_listview_additem (hwnd, IDC_REGIONS, 2, buffer, I_DEFAULT, I_DEFAULT, REDUCT_MODIFIEDLIST);
 
 					_r_str_printf (buffer, RTL_NUMBER_OF (buffer), L"%s*", _r_locale_getstring (IDS_MEMREGION_STANDBYLIST));
-					_r_listview_additem (hwnd, IDC_REGIONS, 3, _r_locale_getstring (IDS_MEMREGION_STANDBYLIST), I_DEFAULT, I_DEFAULT, REDUCT_STANDBYLIST);
+					_r_listview_additem (hwnd, IDC_REGIONS, 3, buffer, I_DEFAULT, I_DEFAULT, REDUCT_STANDBYLIST);
 
 					_r_listview_additem (hwnd, IDC_REGIONS, 4, _r_locale_getstring (IDS_MEMREGION_STANDBYLISTPRIORITY0), I_DEFAULT, I_DEFAULT, REDUCT_STANDBYPRIORITY0LIST);
 					_r_listview_additem (hwnd, IDC_REGIONS, 5, _r_locale_getstring (IDS_MEMREGION_MODIFIEDFILECACHE), I_DEFAULT, I_DEFAULT, REDUCT_MODIFIEDFILECACHE);
 
-					_r_str_printf (buffer, RTL_NUMBER_OF (buffer), L"%s (win8.1+)", _r_locale_getstring (IDS_MEMREGION_REGISTRYCACHE));
-					_r_listview_additem (hwnd, IDC_REGIONS, 6, buffer, I_DEFAULT, I_DEFAULT, REDUCT_REGISTRYCACHE);
+					_r_listview_additem (hwnd, IDC_REGIONS, 6, _r_locale_getstring (IDS_MEMREGION_REGISTRYCACHE), I_DEFAULT, I_DEFAULT, REDUCT_REGISTRYCACHE);
 
-					_r_str_printf (buffer, RTL_NUMBER_OF (buffer), L"%s (win10+)", _r_locale_getstring (IDS_MEMREGION_COMBINEMEMORYLISTS));
-					_r_listview_additem (hwnd, IDC_REGIONS, 7, buffer, I_DEFAULT, I_DEFAULT, REDUCT_COMBINEMEMORYLISTS);
+					_r_listview_additem (hwnd, IDC_REGIONS, 7, _r_locale_getstring (IDS_MEMREGION_COMBINEMEMORYLISTS), I_DEFAULT, I_DEFAULT, REDUCT_COMBINEMEMORYLISTS);
 
 					_r_listview_setcolumn (hwnd, IDC_REGIONS, 0, NULL, -100);
 
@@ -1244,29 +1248,7 @@ INT_PTR CALLBACK SettingsProc (
 						{
 							LONG_PTR value = CDRF_DODEFAULT;
 
-							if (lpnmlv->nmcd.hdr.idFrom == IDC_REGIONS)
-							{
-								if (_r_sys_isosversionlower (WINDOWS_8_1) && (lpnmlv->nmcd.lItemlParam & REDUCT_REGISTRYCACHE) == REDUCT_REGISTRYCACHE)
-								{
-									clr = _r_theme_isenabled () ? WND_GRAYTEXT_CLR : GetSysColor (COLOR_GRAYTEXT);
-
-									lpnmlv->clrText = _r_dc_getcolorbrightness (clr);
-									lpnmlv->clrTextBk = clr;
-
-									value = CDRF_NEWFONT;
-								}
-
-								if (_r_sys_isosversionlower (WINDOWS_10) && (lpnmlv->nmcd.lItemlParam & REDUCT_COMBINEMEMORYLISTS) == REDUCT_COMBINEMEMORYLISTS)
-								{
-									clr = _r_theme_isenabled () ? WND_GRAYTEXT_CLR : GetSysColor (COLOR_GRAYTEXT);
-
-									lpnmlv->clrText = _r_dc_getcolorbrightness (clr);
-									lpnmlv->clrTextBk = clr;
-
-									value = CDRF_NEWFONT;
-								}
-							}
-							else if (lpnmlv->nmcd.hdr.idFrom == IDC_COLORS)
+							if (lpnmlv->nmcd.hdr.idFrom == IDC_COLORS)
 							{
 								clr = (COLORREF)lpnmlv->nmcd.lItemlParam;
 
@@ -1365,20 +1347,6 @@ INT_PTR CALLBACK SettingsProc (
 									return FALSE;
 								}
 							}
-						}
-
-						if (_r_sys_isosversionlower (WINDOWS_8_1) && (value & REDUCT_REGISTRYCACHE) == REDUCT_REGISTRYCACHE)
-						{
-							_r_listview_setitemcheck (hwnd, (INT)(INT_PTR)lpnmlv->hdr.idFrom, lpnmlv->iItem, (mask & REDUCT_REGISTRYCACHE) == REDUCT_REGISTRYCACHE);
-
-							return FALSE;
-						}
-
-						if (_r_sys_isosversionlower (WINDOWS_10) && (value & REDUCT_COMBINEMEMORYLISTS) == REDUCT_COMBINEMEMORYLISTS)
-						{
-							_r_listview_setitemcheck (hwnd, (INT)(INT_PTR)lpnmlv->hdr.idFrom, lpnmlv->iItem, (mask & REDUCT_COMBINEMEMORYLISTS) == REDUCT_COMBINEMEMORYLISTS);
-
-							return FALSE;
 						}
 
 						if ((lpnmlv->uNewState & LVIS_STATEIMAGEMASK) == INDEXTOSTATEIMAGEMASK (2))
@@ -1820,11 +1788,37 @@ FORCEINLINE BOOLEAN _app_update_isvalidversion (
 	return is_number_found;
 }
 
+BOOLEAN _app_update_isvalidhash (
+	_In_ PR_STRINGREF hash
+)
+{
+	WCHAR value;
+
+	if (hash->length != (UPDATE_HASH_HEX_LENGTH * sizeof (WCHAR)))
+		return FALSE;
+
+	for (SIZE_T i = 0; i < (hash->length / sizeof (WCHAR)); i++)
+	{
+		value = hash->buffer[i];
+
+		if (value >= L'0' && value <= L'9')
+			continue;
+
+		if ((value >= L'a' && value <= L'f') || (value >= L'A' && value <= L'F'))
+			continue;
+
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
 _Success_ (NT_SUCCESS (return))
 NTSTATUS _app_update_query (
 	_In_ HINTERNET hsession,
 	_Out_ PR_STRING_PTR out_version,
-	_Out_ PR_STRING_PTR out_url
+	_Out_ PR_STRING_PTR out_url,
+	_Out_ PR_STRING_PTR out_hash
 )
 {
 	PR_HASHTABLE string_table = NULL;
@@ -1832,15 +1826,18 @@ NTSTATUS _app_update_query (
 	PR_STRING manifest_url;
 	PR_STRING version;
 	PR_STRING url;
+	PR_STRING hash;
 	R_DOWNLOAD_INFO download_info;
 	R_STRINGREF key_ref;
 	R_STRINGREF version_ref;
 	R_STRINGREF url_ref;
+	R_STRINGREF hash_ref;
 	R_STRINGREF remaining_ref;
 	NTSTATUS status;
 
 	*out_version = NULL;
 	*out_url = NULL;
+	*out_hash = NULL;
 
 	manifest_url = _r_obj_createstring (UPDATE_MANIFEST_URL);
 
@@ -1889,11 +1886,26 @@ NTSTATUS _app_update_query (
 		goto CleanupExit;
 	}
 
+	// the hash is optional, old manifests keep working without it
+	hash = NULL;
+
+	if (_r_str_splitatchar (&remaining_ref, L'|', &hash_ref, &remaining_ref))
+	{
+		if (!_app_update_isvalidhash (&hash_ref))
+		{
+			status = STATUS_DATA_ERROR;
+			goto CleanupExit;
+		}
+
+		hash = _r_obj_createstring2 (&hash_ref);
+	}
+
 	version = _r_obj_createstring2 (&version_ref);
 	url = _r_obj_createstring2 (&url_ref);
 
 	*out_version = version;
 	*out_url = url;
+	*out_hash = hash;
 
 	status = STATUS_SUCCESS;
 
@@ -1914,13 +1926,15 @@ NTSTATUS _app_update_downloadinstaller (
 	_In_ HINTERNET hsession,
 	_In_ PR_STRING version,
 	_In_ PR_STRING url,
+	_In_opt_ PR_STRING hash,
 	_Out_ PR_STRING_PTR out_path
 )
 {
 	PR_STRING temp_directory;
 	PR_STRING path;
+	PR_STRING file_hash = NULL;
 	R_DOWNLOAD_INFO download_info;
-	WCHAR signature[2];
+	CHAR signature[2];
 	LONG64 file_size;
 	HANDLE hfile;
 	ULONG_PTR readed_length;
@@ -1929,6 +1943,9 @@ NTSTATUS _app_update_downloadinstaller (
 	*out_path = NULL;
 
 	temp_directory = _r_sys_gettempdirectory ();
+
+	if (!temp_directory)
+		return STATUS_NOT_FOUND;
 
 	path = _r_format_string (L"%s\\%s-%s-setup.exe", temp_directory->buffer, APP_NAME_SHORT, version->buffer);
 
@@ -1980,8 +1997,22 @@ NTSTATUS _app_update_downloadinstaller (
 
 	NtClose (hfile);
 
-	if (status != STATUS_SUCCESS || readed_length != sizeof (signature) || signature[0] != L'M' || signature[1] != L'Z')
+	if (status != STATUS_SUCCESS || readed_length != sizeof (signature) || signature[0] != 'M' || signature[1] != 'Z')
 		status = STATUS_DATA_ERROR;
+
+	// an MZ header is trivial to forge - refuse to run a payload not matching the published hash
+	if (status == STATUS_SUCCESS && hash)
+	{
+		status = _r_crypt_getfilehash (UPDATE_HASH_ALGORITHM, &path->sr, NULL, &file_hash);
+
+		if (NT_SUCCESS (status))
+		{
+			if (_r_str_compare (file_hash->buffer, hash->buffer, TRUE) != 0)
+				status = STATUS_DATA_ERROR;
+
+			_r_obj_dereference (file_hash);
+		}
+	}
 
 CleanupExit:
 
@@ -2008,6 +2039,7 @@ NTSTATUS NTAPI _app_update_thread (
 	PR_STRING proxy;
 	PR_STRING version = NULL;
 	PR_STRING url = NULL;
+	PR_STRING hash = NULL;
 	PR_STRING path = NULL;
 	R_STRINGREF current_ref;
 	HINTERNET hsession = NULL;
@@ -2023,8 +2055,9 @@ NTSTATUS NTAPI _app_update_thread (
 
 	hsession = _r_inet_createsession (useragent, proxy);
 
-	_r_obj_dereference (useragent);
-	_r_obj_dereference (proxy);
+	// useragent is a cached object owned by routine, must not be released here
+	if (proxy)
+		_r_obj_dereference (proxy);
 
 	if (!hsession)
 	{
@@ -2036,7 +2069,7 @@ NTSTATUS NTAPI _app_update_thread (
 		goto CleanupExit;
 	}
 
-	status = _app_update_query (hsession, &version, &url);
+	status = _app_update_query (hsession, &version, &url, &hash);
 
 	if (!NT_SUCCESS (status))
 	{
@@ -2063,7 +2096,7 @@ NTSTATUS NTAPI _app_update_thread (
 		goto CleanupExit;
 	}
 
-	status = _app_update_downloadinstaller (hsession, version, url, &path);
+	status = _app_update_downloadinstaller (hsession, version, url, hash, &path);
 
 	if (!NT_SUCCESS (status))
 	{
@@ -2098,6 +2131,9 @@ CleanupExit:
 
 	if (url)
 		_r_obj_dereference (url);
+
+	if (hash)
+		_r_obj_dereference (hash);
 
 	if (path)
 	{
@@ -2440,21 +2476,13 @@ INT_PTR CALLBACK DlgProc (
 					_r_menu_additem (hmenu, IDM_CLEAN_MODIFIEDLIST, buffer);
 
 					_r_str_printf (buffer, RTL_NUMBER_OF (buffer), L"%s*", _r_locale_getstring (IDS_MEMREGION_STANDBYLIST));
-					_r_menu_additem (hmenu, IDM_CLEAN_STANDBYLIST, _r_locale_getstring (IDS_MEMREGION_STANDBYLIST));
+					_r_menu_additem (hmenu, IDM_CLEAN_STANDBYLIST, buffer);
 
 					_r_menu_additem (hmenu, IDM_CLEAN_STANDBYLISTPRIORITY0, _r_locale_getstring (IDS_MEMREGION_STANDBYLISTPRIORITY0));
 
-					_r_str_printf (buffer, RTL_NUMBER_OF (buffer), L"%s (win8.1+)", _r_locale_getstring (IDS_MEMREGION_REGISTRYCACHE));
-					_r_menu_additem (hmenu, IDM_CLEAN_REGISTRYCACHE, buffer);
+					_r_menu_additem (hmenu, IDM_CLEAN_REGISTRYCACHE, _r_locale_getstring (IDS_MEMREGION_REGISTRYCACHE));
 
-					_r_str_printf (buffer, RTL_NUMBER_OF (buffer), L"%s (win10+)", _r_locale_getstring (IDS_MEMREGION_COMBINEMEMORYLISTS));
-					_r_menu_additem (hmenu, IDM_CLEAN_COMBINEMEMORYLISTS, buffer);
-
-					if (_r_sys_isosversionlower (WINDOWS_8_1))
-						_r_menu_enableitem (hmenu, IDM_CLEAN_REGISTRYCACHE, FALSE, FALSE);
-
-					if (_r_sys_isosversionlower (WINDOWS_10))
-						_r_menu_enableitem (hmenu, IDM_CLEAN_COMBINEMEMORYLISTS, FALSE, FALSE);
+					_r_menu_additem (hmenu, IDM_CLEAN_COMBINEMEMORYLISTS, _r_locale_getstring (IDS_MEMREGION_COMBINEMEMORYLISTS));
 
 					if (GetClientRect (nmlp->hwndFrom, &rect))
 					{
@@ -2614,8 +2642,8 @@ INT_PTR CALLBACK DlgProc (
 						_r_menu_setitemtextformat (hsubmenu_region, IDM_MODIFIEDLIST_CHK, FALSE, L"%s*", _r_locale_getstring (IDS_MEMREGION_MODIFIEDLIST));
 						_r_menu_setitemtextformat (hsubmenu_region, IDM_STANDBYLIST_CHK, FALSE, L"%s*", _r_locale_getstring (IDS_MEMREGION_STANDBYLIST));
 						_r_menu_setitemtext (hsubmenu_region, IDM_STANDBYLISTPRIORITY0_CHK, FALSE, _r_locale_getstring (IDS_MEMREGION_STANDBYLISTPRIORITY0));
-						_r_menu_setitemtextformat (hsubmenu_region, IDM_REGISTRYCACHE_CHK, FALSE, L"%s (win8.1+)", _r_locale_getstring (IDS_MEMREGION_REGISTRYCACHE));
-						_r_menu_setitemtextformat (hsubmenu_region, IDM_COMBINEMEMORYLISTS_CHK, FALSE, L"%s (win10+)", _r_locale_getstring (IDS_MEMREGION_COMBINEMEMORYLISTS));
+						_r_menu_setitemtext (hsubmenu_region, IDM_REGISTRYCACHE_CHK, FALSE, _r_locale_getstring (IDS_MEMREGION_REGISTRYCACHE));
+						_r_menu_setitemtext (hsubmenu_region, IDM_COMBINEMEMORYLISTS_CHK, FALSE, _r_locale_getstring (IDS_MEMREGION_COMBINEMEMORYLISTS));
 
 						_r_menu_checkitem (hsubmenu_region, IDM_WORKINGSET_CHK, 0, MF_BYCOMMAND, (mask & REDUCT_WORKINGSET) == REDUCT_WORKINGSET);
 						_r_menu_checkitem (hsubmenu_region, IDM_SYSTEMFILECACHE_CHK, 0, MF_BYCOMMAND, (mask & REDUCT_SYSTEMFILECACHE) == REDUCT_SYSTEMFILECACHE);
@@ -2638,13 +2666,6 @@ INT_PTR CALLBACK DlgProc (
 							_r_menu_enableitem (hsubmenu_region, IDM_COMBINEMEMORYLISTS_CHK, FALSE, FALSE);
 						}
 
-						// flush registry cache (win8.1+)
-						if (_r_sys_isosversionlower (WINDOWS_8_1))
-							_r_menu_enableitem (hsubmenu_region, IDM_REGISTRYCACHE_CHK, FALSE, FALSE);
-
-						// combine memory lists (win10+)
-						if (_r_sys_isosversionlower (WINDOWS_10))
-							_r_menu_enableitem (hsubmenu_region, IDM_COMBINEMEMORYLISTS_CHK, FALSE, FALSE);
 					}
 
 					// configure submenu #2

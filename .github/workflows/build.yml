@@ -12,15 +12,15 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-permissions:
-  contents: write
-
 env:
   APP_NAME_SHORT: memreduct
   APP_NAME: Mem Reduct
 
 jobs:
   build:
+    permissions:
+      contents: read
+      artifacts: write
     runs-on: windows-2025-vs2026
 
     steps:
@@ -33,12 +33,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: henrypp/routine
+          ref: 1acd9394395b7cee9e1ea7b985fb54e76be86b11
           path: routine
 
       - name: Checkout builder
         uses: actions/checkout@v4
         with:
           repository: henrypp/builder
+          ref: 124afc79ce0462170d66df1922be5944dea85dfb
           path: builder
 
       - name: Read version
@@ -82,17 +84,43 @@ jobs:
         run: |
           python src/build_package.py --name-short=$env:APP_NAME_SHORT --version=${{ steps.version.outputs.version }} --name="$env:APP_NAME"
 
+      - name: Create portable zip
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:TEMP 'builder\memreduct'
+          $desktop = Join-Path $env:USERPROFILE 'Desktop'
+          $zip = Join-Path $desktop ("memreduct-${{ steps.version.outputs.version }}-bin.zip")
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal
+          Get-ChildItem $desktop -Filter 'memreduct-*' | Select-Object Name, Length
+
       - name: Collect artifacts
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           $desktop = Join-Path $env:USERPROFILE 'Desktop'
           $version = '${{ steps.version.outputs.version }}'
-          foreach ($pattern in @("memreduct-$version-setup.exe", "memreduct-$version-bin.7z", "memreduct-$version.pdb.7z", "memreduct-$version.sha256")) {
+          foreach ($pattern in @("memreduct-$version-setup.exe", "memreduct-$version-bin.zip")) {
             $found = Get-ChildItem -Path $desktop -Filter $pattern -ErrorAction SilentlyContinue
             if ($found) { Copy-Item $found.FullName dist/ -Force }
           }
           Get-ChildItem dist
+
+      - name: Publish update manifest line
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $setup = Join-Path (Get-Location) "dist/memreduct-$version-setup.exe"
+          if (-not (Test-Path $setup)) { Write-Error "missing $setup"; exit 1 }
+          $sha = (Get-FileHash -Path $setup -Algorithm SHA256).Hash.ToLower()
+          # the release asset lives under the tag name, which is always "v." + APP_VERSION
+          $line = "memreduct=$version|https://github.com/$env:GITHUB_REPOSITORY/releases/download/v.$version/memreduct-$version-setup.exe|$sha;"
+          Write-Host $line
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### VERSION line (installer is verified against this sha256)"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $line
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "Paste this line into VERSION on branch main after pushing the v.$version tag."
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -104,6 +132,9 @@ jobs:
   release:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v.')
+    permissions:
+      contents: write
+      actions: read
     runs-on: windows-2025-vs2026
 
     steps:

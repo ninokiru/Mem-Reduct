@@ -1,3 +1,27 @@
+v0.0.2 (21 October 2026)
+
+\- fixed access violation in the update checker (the application crashed shortly after start when no proxy was configured)
+
+\- fixed installer download always failing on the executable signature check
+
+\- the downloaded installer is now executed only when its sha256 matches the VERSION manifest
+
+\- fixed standby list rows showing the untranslated region name instead of the formatted one
+
+\- removed dead Windows 7 / 8 / 8.1 version checks and their (win8.1+) labels
+
+\- manifest now declares Windows 10 21H1 and newer, tested up to 10.0.26200
+
+\- localization reduced to English and Vietnamese
+
+\- releases now carry two files only: setup .exe and portable .zip
+
+v0.0.1 (20 October 2026)
+
+\- first build of the fork, based on upstream v3.5.2
+
+\- signed as Lumina, own update channel at ninokiru/Mem-Reduct
+
 v3.5.2 (1 April 2025)
 
 \- added modified file cache clean
