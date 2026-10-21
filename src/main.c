@@ -361,8 +361,8 @@ NTSTATUS _app_flushvolumecache ()
 		if (mountpoint->SymbolicLinkNameLength < sizeof (UNICODE_NULL) || (mountpoint->SymbolicLinkNameLength % sizeof (UNICODE_NULL)) != 0)
 			continue;
 
-		us.Length = mountpoint->SymbolicLinkNameLength;
-		us.MaximumLength = mountpoint->SymbolicLinkNameLength;
+		us.Length = (USHORT)mountpoint->SymbolicLinkNameLength;
+		us.MaximumLength = (USHORT)(mountpoint->SymbolicLinkNameLength + sizeof (UNICODE_NULL));
 		us.Buffer = PTR_ADD_OFFSET (object_mountpoints, mountpoint->SymbolicLinkNameOffset);
 
 		if (MOUNTMGR_IS_VOLUME_NAME (&us)) // \\??\\Volume{1111-2222}
