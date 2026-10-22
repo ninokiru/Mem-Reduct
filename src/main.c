@@ -84,7 +84,7 @@ VOID _app_generate_menu (
 	_In_ ULONG menu_idx,
 	_Out_ _Writable_elements_ (count) PULONG integers,
 	_In_ ULONG_PTR count,
-	_In_ LPCWSTR format,
+	_In_opt_ LPCWSTR unit,
 	_In_ ULONG value,
 	_In_ ULONG max_value,
 	_In_ BOOLEAN is_enabled
@@ -108,7 +108,11 @@ VOID _app_generate_menu (
 
 		menu_id = (menu_idx + i);
 
-		_r_str_printf (buffer, RTL_NUMBER_OF (buffer), format, menu_value);
+		// a locale string is only ever passed as an argument, never as the format
+		if (unit)
+			_r_str_printf (buffer, RTL_NUMBER_OF (buffer), L"%" TEXT (PR_ULONG) L" %s", menu_value, unit);
+		else
+			_r_str_printf (buffer, RTL_NUMBER_OF (buffer), L"%" TEXT (PR_ULONG) L"%%", menu_value);
 
 		_r_menu_additem (hsubmenu, menu_id, buffer);
 
@@ -197,11 +201,27 @@ LONG _app_edit_getnumber (
 	return value;
 }
 
+VOID _app_fixmemorygroup (
+	_Inout_ PR_MEMORY_OBJECT group
+)
+{
+	// the page file can be switched off, and the sdk computes the percent by dividing through its zero size
+	if (!group->total_bytes)
+	{
+		group->percent = 0;
+		group->percent_f = 0.0;
+	}
+}
+
 ULONG64 _app_getmemoryinfo (
 	_Out_ PR_MEMORY_INFO mem_info
 )
 {
 	_r_sys_getmemoryinfo (mem_info);
+
+	_app_fixmemorygroup (&mem_info->physical_memory);
+	_app_fixmemorygroup (&mem_info->page_file);
+	_app_fixmemorygroup (&mem_info->system_cache);
 
 	return mem_info->physical_memory.used_bytes;
 }
@@ -242,6 +262,66 @@ FORCEINLINE LPCWSTR _app_getcleanupreason (
 			return L"Unknown";
 		}
 	}
+}
+
+VOID _app_log_rotate ()
+{
+	PR_STRING log_path;
+	LONG64 file_size = 0;
+	HANDLE hfile;
+	NTSTATUS status;
+
+	log_path = _r_app_getlogpath ();
+
+	status = _r_fs_getsize2 (&log_path->sr, NULL, &file_size);
+
+	if (status != STATUS_SUCCESS || file_size <= LOG_MAXIMUM_SIZE)
+		return;
+
+	// routine only appends to the debug log, so empty it once in a while to stop a long run filling the disk
+	status = _r_fs_createfile (
+		&log_path->sr,
+		FILE_TRUNCATE_IF_EXISTS,
+		GENERIC_WRITE,
+		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+		FILE_ATTRIBUTE_NORMAL,
+		FILE_SEQUENTIAL_ONLY,
+		FALSE,
+		NULL,
+		&hfile
+	);
+
+	if (status == STATUS_SUCCESS)
+		NtClose (hfile);
+}
+
+BOOLEAN _app_issafeformat (
+	_In_ LPCWSTR format,
+	_In_ ULONG count
+)
+{
+	SIZE_T index = 0;
+	ULONG found = 0;
+
+	while (format[index] != UNICODE_NULL)
+	{
+		if (format[index] == L'%')
+		{
+			// a lone '%' or anything else in the conversion reads arguments we never pass
+			if (format[index + 1] != L's')
+				return FALSE;
+
+			found += 1;
+
+			index += 2;
+
+			continue;
+		}
+
+		index += 1;
+	}
+
+	return (found == count);
 }
 
 BOOLEAN _app_config_invertboolean (
@@ -332,6 +412,7 @@ VOID _app_memoryclean (
 	R_MEMORY_INFO mem_info;
 	ULONG64 reduct_after, reduct_before;
 	ULONG flags = NIIF_WARNING;
+	LPCWSTR cleaned_message;
 	BOOLEAN is_failed = FALSE;
 	NTSTATUS status;
 
@@ -442,7 +523,8 @@ VOID _app_memoryclean (
 
 	is_running = TRUE;
 
-	if (src == SOURCE_MANUAL)
+	// purging a single region stutters the system as much as cleaning everything, so ask before either
+	if (src == SOURCE_MANUAL || src == SOURCE_MANUAL_REGION)
 	{
 		if (!_r_show_confirmmessage (hwnd, _r_locale_getstring (IDS_QUESTION), buffer_region, L"IsShowReductConfirmation", FALSE))
 		{
@@ -576,7 +658,13 @@ VOID _app_memoryclean (
 
 	_r_format_bytesize64 (buffer_cleaned_result, RTL_NUMBER_OF (buffer_cleaned_result), reduct_after);
 
-	_r_str_printf (buffer_status, RTL_NUMBER_OF (buffer_status), _r_locale_getstring (IDS_STATUS_CLEANED), buffer_cleaned_result);
+	cleaned_message = _r_locale_getstring (IDS_STATUS_CLEANED);
+
+	// the message comes from a locale pack which the user can edit, so only print through it when it is well formed
+	if (_app_issafeformat (cleaned_message, 1))
+		_r_str_printf (buffer_status, RTL_NUMBER_OF (buffer_status), cleaned_message, buffer_cleaned_result);
+	else
+		_r_str_printf (buffer_status, RTL_NUMBER_OF (buffer_status), L"%s %s", cleaned_message, buffer_cleaned_result);
 	_r_str_printf (buffer_result, RTL_NUMBER_OF (buffer_result), L"%s\r\n\r\n%s:\r\n%s", buffer_status, _r_locale_getstring (IDS_TITLE_3), buffer_region);
 
 	if (src == SOURCE_CMDLINE)
@@ -593,7 +681,11 @@ VOID _app_memoryclean (
 	}
 
 	if (_r_config_getboolean_ex (L"LogCleanResults", FALSE, NULL))
+	{
+		_app_log_rotate ();
+
 		_r_log_v (LOG_LEVEL_INFO, NULL, _app_getcleanupreason (src), 0, L"%s", buffer_cleaned_result);
+	}
 
 	if (src == SOURCE_CMDLINE)
 		cmdline_exit_code = is_failed ? 1 : ERROR_SUCCESS;
@@ -730,10 +822,14 @@ HICON _app_iconcreate (
 	max_width = config.icon_size.right - 2;
 	text_width = _r_dc_getfontwidth (config.hdc, &sr, NULL);
 
-	if (text_width > max_width && GetObjectW (config.hfont, sizeof (LOGFONT), &logfont))
+	if (max_width > 0 && text_width > max_width && GetObjectW (config.hfont, sizeof (LOGFONT), &logfont))
 	{
 		logfont.lfHeight = MulDiv (logfont.lfHeight, max_width, text_width);
 		logfont.lfWidth = 0;
+
+		// a strongly shrunk badge rounds the height away to nothing and the font mapper then silently restores the old size
+		if (!logfont.lfHeight)
+			logfont.lfHeight = -1;
 
 		hfont_fit = CreateFontIndirectW (&logfont);
 
@@ -783,6 +879,24 @@ HICON _app_iconcreate (
 	return hicon_new;
 }
 
+BOOLEAN _app_listviewsettext (
+	_In_ HWND hwnd,
+	_In_ INT item_id,
+	_In_ INT subitem_id,
+	_In_ LPCWSTR text
+)
+{
+	// pushing an unchanged string still repaints the row, so remember what the list already shows
+	if (_r_str_compare (text, config.item_prev[item_id], FALSE) == 0)
+		return FALSE;
+
+	_r_str_copy (config.item_prev[item_id], RTL_NUMBER_OF (config.item_prev[item_id]), text);
+
+	_r_listview_setitem (hwnd, IDC_LISTVIEW, item_id, subitem_id, text, I_DEFAULT, I_DEFAULT, I_DEFAULT);
+
+	return TRUE;
+}
+
 VOID CALLBACK _app_timercallback (
 	_In_ HWND hwnd,
 	_In_ UINT msg,
@@ -792,12 +906,14 @@ VOID CALLBACK _app_timercallback (
 {
 	R_MEMORY_INFO mem_info;
 	WCHAR buffer[0x80];
+	WCHAR tooltip[0x80];
 	HICON hicon = NULL;
 	HICON hicon_prev = NULL;
 	LONG64 timestamp;
 	ULONG limit_value;
 	ULONG percent;
 	BOOLEAN is_clean = FALSE;
+	BOOLEAN is_redraw = FALSE;
 
 	if (id_event != UID)
 		return;
@@ -849,10 +965,9 @@ VOID CALLBACK _app_timercallback (
 		hicon = NULL;
 	}
 
-	_r_tray_setinfoformat (
-		hwnd,
-		&GUID_TrayIcon,
-		hicon,
+	_r_str_printf (
+		tooltip,
+		RTL_NUMBER_OF (tooltip),
 		L"%s: %" TEXT (PR_DOUBLE) L"%%\r\n%s: %" TEXT (PR_DOUBLE) L"%%\r\n%s: %" TEXT (PR_DOUBLE) L"%%",
 		_r_locale_getstring (IDS_GROUP_1),
 		mem_info.physical_memory.percent_f,
@@ -862,6 +977,14 @@ VOID CALLBACK _app_timercallback (
 		mem_info.system_cache.percent_f
 	);
 
+	// NIM_MODIFY makes the shell repaint the tray band, so send it only when the icon or the text changed
+	if (hicon || _r_str_compare (tooltip, config.tooltip_prev, FALSE) != 0)
+	{
+		_r_str_copy (config.tooltip_prev, RTL_NUMBER_OF (config.tooltip_prev), tooltip);
+
+		_r_tray_setinfo (hwnd, &GUID_TrayIcon, hicon, config.tooltip_prev);
+	}
+
 	// the tray have taken the new icon - the previous one is not required anymore
 	if (hicon_prev && hicon_prev != config.hicon)
 		DestroyIcon (hicon_prev);
@@ -869,7 +992,7 @@ VOID CALLBACK _app_timercallback (
 	if (!_r_wnd_isvisible (hwnd, FALSE))
 		return;
 
-	// set item lparam information
+	// set item lparam information, the colour indication reads it back on every draw
 	for (INT i = 0; i < _r_listview_getitemcount (hwnd, IDC_LISTVIEW); i++)
 	{
 		if (i < 3)
@@ -889,40 +1012,47 @@ VOID CALLBACK _app_timercallback (
 			continue;
 		}
 
+		if ((ULONG)_r_listview_getitemlparam (hwnd, IDC_LISTVIEW, i) == percent)
+			continue;
+
 		_r_listview_setitem (hwnd, IDC_LISTVIEW, i, 0, NULL, I_DEFAULT, I_DEFAULT, (LPARAM)percent);
+
+		is_redraw = TRUE;
 	}
 
 	// physical memory
 	_r_str_printf (buffer, RTL_NUMBER_OF (buffer), L"%" TEXT (PR_DOUBLE) L"%%", mem_info.physical_memory.percent_f);
-	_r_listview_setitem (hwnd, IDC_LISTVIEW, 0, 1, buffer, I_DEFAULT, I_DEFAULT, I_DEFAULT);
+	is_redraw |= _app_listviewsettext (hwnd, 0, 1, buffer);
 
 	_r_format_bytesize64 (buffer, RTL_NUMBER_OF (buffer), mem_info.physical_memory.free_bytes);
-	_r_listview_setitem (hwnd, IDC_LISTVIEW, 1, 1, buffer, I_DEFAULT, I_DEFAULT, I_DEFAULT);
+	is_redraw |= _app_listviewsettext (hwnd, 1, 1, buffer);
 
 	_r_format_bytesize64 (buffer, RTL_NUMBER_OF (buffer), mem_info.physical_memory.total_bytes);
-	_r_listview_setitem (hwnd, IDC_LISTVIEW, 2, 1, buffer, I_DEFAULT, I_DEFAULT, I_DEFAULT);
+	is_redraw |= _app_listviewsettext (hwnd, 2, 1, buffer);
 
 	// pagefile
 	_r_str_printf (buffer, RTL_NUMBER_OF (buffer), L"%" TEXT (PR_DOUBLE) L"%%", mem_info.page_file.percent_f);
-	_r_listview_setitem (hwnd, IDC_LISTVIEW, 3, 1, buffer, I_DEFAULT, I_DEFAULT, I_DEFAULT);
+	is_redraw |= _app_listviewsettext (hwnd, 3, 1, buffer);
 
 	_r_format_bytesize64 (buffer, RTL_NUMBER_OF (buffer), mem_info.page_file.free_bytes);
-	_r_listview_setitem (hwnd, IDC_LISTVIEW, 4, 1, buffer, I_DEFAULT, I_DEFAULT, I_DEFAULT);
+	is_redraw |= _app_listviewsettext (hwnd, 4, 1, buffer);
 
 	_r_format_bytesize64 (buffer, RTL_NUMBER_OF (buffer), mem_info.page_file.total_bytes);
-	_r_listview_setitem (hwnd, IDC_LISTVIEW, 5, 1, buffer, I_DEFAULT, I_DEFAULT, I_DEFAULT);
+	is_redraw |= _app_listviewsettext (hwnd, 5, 1, buffer);
 
 	// system cache
 	_r_str_printf (buffer, RTL_NUMBER_OF (buffer), L"%" TEXT (PR_DOUBLE) L"%%", mem_info.system_cache.percent_f);
-	_r_listview_setitem (hwnd, IDC_LISTVIEW, 6, 1, buffer, I_DEFAULT, I_DEFAULT, I_DEFAULT);
+	is_redraw |= _app_listviewsettext (hwnd, 6, 1, buffer);
 
 	_r_format_bytesize64 (buffer, RTL_NUMBER_OF (buffer), mem_info.system_cache.free_bytes);
-	_r_listview_setitem (hwnd, IDC_LISTVIEW, 7, 1, buffer, I_DEFAULT, I_DEFAULT, I_DEFAULT);
+	is_redraw |= _app_listviewsettext (hwnd, 7, 1, buffer);
 
 	_r_format_bytesize64 (buffer, RTL_NUMBER_OF (buffer), mem_info.system_cache.total_bytes);
-	_r_listview_setitem (hwnd, IDC_LISTVIEW, 8, 1, buffer, I_DEFAULT, I_DEFAULT, I_DEFAULT);
+	is_redraw |= _app_listviewsettext (hwnd, 8, 1, buffer);
 
-	_r_listview_redraw (hwnd, IDC_LISTVIEW);
+	// an idle machine stops producing new values, so the list is not repainted at all then
+	if (is_redraw)
+		_r_listview_redraw (hwnd, IDC_LISTVIEW);
 }
 
 VOID _app_iconredraw (
@@ -1295,6 +1425,9 @@ INT_PTR CALLBACK SettingsProc (
 
 				case IDD_SETTINGS_ADVANCED:
 				{
+					// the page shares IDC_TITLE_1 with the general page, so its caption must be overwritten after the common pass
+					_r_ctrl_setstringformat (hwnd, IDC_TITLE_1, L"%s:", _r_locale_getstring (IDS_TITLE_ADVANCED));
+
 					_r_ctrl_setstring (hwnd, IDC_ALLOWSTANDBYLISTCLEANUP_CHK, _r_locale_getstring (IDS_ALLOWSTANDBYLISTCLEANUP_CHK));
 					_r_ctrl_setstring (hwnd, IDC_LOGRESULTS_CHK, _r_locale_getstring (IDS_LOGRESULTS_CHK));
 
@@ -1894,6 +2027,235 @@ BOOLEAN _app_update_isvalidhash (
 	return TRUE;
 }
 
+// routine's downloader retries a failed certificate check with SECURITY_FLAG_IGNORE_UNKNOWN_CA, which would let
+// anybody able to present a self-signed certificate serve both the manifest and the installer we then run as
+// admin. The update channel is fetched here instead: chain validation stays on, https is required and the
+// response size is bounded.
+_Success_ (return == ERROR_SUCCESS)
+ULONG _app_http_openurl (
+	_In_ HINTERNET hsession,
+	_In_ PR_STRINGREF url,
+	_Out_ LPHINTERNET hconnect_ptr,
+	_Out_ LPHINTERNET hrequest_ptr,
+	_Out_opt_ PULONG total_length_ptr
+)
+{
+	R_URLPARTS url_parts = {0};
+	HINTERNET hrequest = NULL;
+	HINTERNET hconnect = NULL;
+	ULONG status;
+
+	*hconnect_ptr = NULL;
+	*hrequest_ptr = NULL;
+
+	if (total_length_ptr)
+		*total_length_ptr = 0;
+
+	if (!_r_inet_queryurlparts (url, PR_URLPARTS_SCHEME | PR_URLPARTS_HOST | PR_URLPARTS_PORT | PR_URLPARTS_PATH, &url_parts))
+	{
+		status = NtLastError ();
+
+		goto CleanupExit;
+	}
+
+	if (url_parts.scheme != INTERNET_SCHEME_HTTPS)
+	{
+		status = ERROR_WINHTTP_INVALID_URL;
+
+		goto CleanupExit;
+	}
+
+	hconnect = WinHttpConnect (hsession, url_parts.host->buffer, url_parts.port, 0);
+
+	if (!hconnect)
+	{
+		status = NtLastError ();
+
+		goto CleanupExit;
+	}
+
+	hrequest = WinHttpOpenRequest (hconnect, NULL, url_parts.path->buffer, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE | WINHTTP_FLAG_REFRESH);
+
+	if (!hrequest)
+	{
+		status = NtLastError ();
+
+		goto CleanupExit;
+	}
+
+	WinHttpSetOption (hrequest, WINHTTP_OPTION_DISABLE_FEATURE, &(ULONG){WINHTTP_DISABLE_KEEP_ALIVE}, sizeof (ULONG));
+
+	if (!WinHttpSendRequest (hrequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH, 0))
+	{
+		status = NtLastError ();
+
+		goto CleanupExit;
+	}
+
+	if (!WinHttpReceiveResponse (hrequest, NULL))
+	{
+		status = NtLastError ();
+
+		goto CleanupExit;
+	}
+
+	if (_r_inet_querystatuscode (hrequest) != HTTP_STATUS_OK)
+	{
+		status = ERROR_WINHTTP_INVALID_SERVER_RESPONSE;
+
+		goto CleanupExit;
+	}
+
+	*hconnect_ptr = hconnect;
+	*hrequest_ptr = hrequest;
+
+	if (total_length_ptr)
+		*total_length_ptr = _r_inet_querycontentlength (hrequest);
+
+	status = ERROR_SUCCESS;
+
+CleanupExit:
+
+	if (status != ERROR_SUCCESS)
+	{
+		if (hrequest)
+			_r_inet_close (hrequest);
+
+		if (hconnect)
+			_r_inet_close (hconnect);
+	}
+
+	_r_inet_destroyurlparts (&url_parts);
+
+	return status;
+}
+
+_Success_ (NT_SUCCESS (return))
+NTSTATUS _app_http_gettext (
+	_In_ HINTERNET hsession,
+	_In_ PR_STRINGREF url,
+	_In_ ULONG maximum_length,
+	_Out_ PR_STRING_PTR out_string
+)
+{
+	R_STRINGBUILDER sb;
+	HINTERNET hconnect;
+	HINTERNET hrequest;
+	PR_BYTE content_bytes;
+	PR_STRING string = NULL;
+	ULONG total_readed = 0;
+	ULONG allocated_length;
+	ULONG readed_length = 0;
+	ULONG win_status;
+	NTSTATUS status;
+
+	*out_string = NULL;
+
+	win_status = _app_http_openurl (hsession, url, &hconnect, &hrequest, NULL);
+
+	if (win_status != ERROR_SUCCESS)
+	{
+		_r_log (LOG_LEVEL_WARNING, NULL, L"_app_http_openurl", (NTSTATUS)win_status, NULL);
+
+		return STATUS_UNSUCCESSFUL;
+	}
+
+	_r_obj_initializestringbuilder (&sb, PR_SIZE_BUFFER);
+
+	allocated_length = PR_SIZE_BUFFER;
+	content_bytes = _r_obj_createbyte_ex (NULL, allocated_length);
+
+	status = STATUS_SUCCESS;
+
+	while (_r_inet_readrequest (hrequest, content_bytes->buffer, allocated_length, &readed_length, &total_readed))
+	{
+		// the manifest is a couple of lines of text, so a bigger response is either broken or hostile
+		if (total_readed > maximum_length)
+		{
+			status = STATUS_BUFFER_OVERFLOW;
+
+			break;
+		}
+
+		_r_obj_setbytelength_ex (content_bytes, readed_length, allocated_length);
+
+		status = _r_str_multibyte2unicode (&content_bytes->sr, &string);
+
+		if (!NT_SUCCESS (status))
+			break;
+
+		_r_obj_appendstringbuilder2 (&sb, &string->sr);
+
+		_r_obj_dereference (string);
+		string = NULL;
+	}
+
+	if (!total_readed && NT_SUCCESS (status))
+		status = STATUS_DATA_ERROR;
+
+	if (NT_SUCCESS (status))
+		*out_string = _r_obj_finalstringbuilder (&sb);
+	else
+		_r_obj_deletestringbuilder (&sb);
+
+	_r_obj_dereference (content_bytes);
+
+	_r_inet_close (hrequest);
+	_r_inet_close (hconnect);
+
+	return status;
+}
+
+_Success_ (NT_SUCCESS (return))
+NTSTATUS _app_http_getfile (
+	_In_ HINTERNET hsession,
+	_In_ PR_STRINGREF url,
+	_In_ HANDLE hfile
+)
+{
+	HINTERNET hconnect;
+	HINTERNET hrequest;
+	PR_BYTE content_bytes;
+	ULONG total_readed = 0;
+	ULONG allocated_length;
+	ULONG readed_length = 0;
+	ULONG win_status;
+	NTSTATUS status;
+
+	win_status = _app_http_openurl (hsession, url, &hconnect, &hrequest, NULL);
+
+	if (win_status != ERROR_SUCCESS)
+	{
+		_r_log (LOG_LEVEL_WARNING, NULL, L"_app_http_openurl", (NTSTATUS)win_status, NULL);
+
+		return STATUS_UNSUCCESSFUL;
+	}
+
+	_r_sys_setthreadexecutionstate (ES_SYSTEM_REQUIRED | ES_CONTINUOUS);
+
+	allocated_length = PR_SIZE_BUFFER;
+	content_bytes = _r_obj_createbyte_ex (NULL, allocated_length);
+
+	status = STATUS_SUCCESS;
+
+	while (_r_inet_readrequest (hrequest, content_bytes->buffer, allocated_length, &readed_length, &total_readed))
+	{
+		status = _r_fs_writefile (hfile, content_bytes->buffer, readed_length);
+
+		if (!NT_SUCCESS (status))
+			break;
+	}
+
+	_r_sys_setthreadexecutionstate (ES_CONTINUOUS);
+
+	_r_obj_dereference (content_bytes);
+
+	_r_inet_close (hrequest);
+	_r_inet_close (hconnect);
+
+	return status;
+}
+
 _Success_ (NT_SUCCESS (return))
 NTSTATUS _app_update_query (
 	_In_ HINTERNET hsession,
@@ -1905,10 +2267,10 @@ NTSTATUS _app_update_query (
 	PR_HASHTABLE string_table = NULL;
 	PR_STRING value = NULL;
 	PR_STRING manifest_url;
+	PR_STRING manifest_text = NULL;
 	PR_STRING version;
 	PR_STRING url;
 	PR_STRING hash;
-	R_DOWNLOAD_INFO download_info;
 	R_STRINGREF key_ref;
 	R_STRINGREF version_ref;
 	R_STRINGREF url_ref;
@@ -1922,28 +2284,13 @@ NTSTATUS _app_update_query (
 
 	manifest_url = _r_obj_createstring (UPDATE_MANIFEST_URL);
 
-	_r_inet_initializedownload (&download_info, NULL, NULL, NULL);
+	status = _app_http_gettext (hsession, &manifest_url->sr, UPDATE_MAXIMUM_MANIFEST_SIZE, &manifest_text);
 
-	status = _r_inet_begindownload (hsession, &manifest_url->sr, &download_info);
-
-	if (status != STATUS_SUCCESS)
-	{
-		_r_log (LOG_LEVEL_WARNING, NULL, L"_r_inet_begindownload", status, UPDATE_MANIFEST_URL);
-
-		// winhttp reports positive error codes, which NT_SUCCESS would read as success
-		status = STATUS_UNSUCCESSFUL;
-
+	if (!NT_SUCCESS (status))
 		goto CleanupExit;
-	}
 
-	if (!download_info.string)
-	{
-		status = STATUS_DATA_ERROR;
-		goto CleanupExit;
-	}
-
-	// manifest format: "name=version|url;name=version|url;"
-	string_table = _r_str_unserialize (&download_info.string->sr, L';', L'=');
+	// manifest format: "name=version|url|hash;name=version|url|hash;"
+	string_table = _r_str_unserialize (&manifest_text->sr, L';', L'=');
 
 	if (!string_table)
 	{
@@ -1980,19 +2327,20 @@ NTSTATUS _app_update_query (
 		goto CleanupExit;
 	}
 
-	// the hash is optional, old manifests keep working without it
-	hash = NULL;
-
-	if (_r_str_splitatchar (&remaining_ref, L'|', &hash_ref, &remaining_ref))
+	// the installer is started with admin rights, so a manifest without its sha256 is refused instead of trusted
+	if (!_r_str_splitatchar (&remaining_ref, L'|', &hash_ref, &remaining_ref))
 	{
-		if (!_app_update_isvalidhash (&hash_ref))
-		{
-			status = STATUS_DATA_ERROR;
-			goto CleanupExit;
-		}
-
-		hash = _r_obj_createstring2 (&hash_ref);
+		status = STATUS_DATA_ERROR;
+		goto CleanupExit;
 	}
+
+	if (!_app_update_isvalidhash (&hash_ref))
+	{
+		status = STATUS_DATA_ERROR;
+		goto CleanupExit;
+	}
+
+	hash = _r_obj_createstring2 (&hash_ref);
 
 	version = _r_obj_createstring2 (&version_ref);
 	url = _r_obj_createstring2 (&url_ref);
@@ -2011,7 +2359,8 @@ CleanupExit:
 	if (string_table)
 		_r_obj_dereference (string_table);
 
-	_r_inet_destroydownload (&download_info);
+	if (manifest_text)
+		_r_obj_dereference (manifest_text);
 
 	_r_obj_dereference (manifest_url);
 
@@ -2023,17 +2372,18 @@ NTSTATUS _app_update_downloadinstaller (
 	_In_ HINTERNET hsession,
 	_In_ PR_STRING version,
 	_In_ PR_STRING url,
-	_In_opt_ PR_STRING hash,
+	_In_ PR_STRING hash,
 	_Out_ PR_STRING_PTR out_path
 )
 {
+	WCHAR token[0x11];
 	PR_STRING temp_directory;
 	PR_STRING path;
 	PR_STRING file_hash = NULL;
-	R_DOWNLOAD_INFO download_info;
 	CHAR signature[2];
+	LARGE_INTEGER new_pos = {0};
 	LONG64 file_size;
-	HANDLE hfile;
+	HANDLE hfile = NULL;
 	ULONG_PTR readed_length;
 	NTSTATUS status;
 
@@ -2044,17 +2394,23 @@ NTSTATUS _app_update_downloadinstaller (
 	if (!temp_directory)
 		return STATUS_NOT_FOUND;
 
-	path = _r_format_string (L"%s\\%s-%s-setup.exe", temp_directory->buffer, APP_NAME_SHORT, version->buffer);
+	// temp is writable by every process of the user, so the name must not be guessable - an attacker could pre-create it and swap the payload before the hash is read
+	_r_str_generaterandom (token, RTL_NUMBER_OF (token), FALSE);
+
+	path = _r_format_string (L"%s\\%s-%s-%s-setup.exe", temp_directory->buffer, APP_NAME_SHORT, version->buffer, token);
 
 	_r_obj_dereference (temp_directory);
+
+	if (!path)
+		return STATUS_NO_MEMORY;
 
 	status = _r_fs_createfile (
 		&path->sr,
 		FILE_OVERWRITE_IF,
-		GENERIC_WRITE,
+		GENERIC_READ | GENERIC_WRITE,
 		FILE_SHARE_READ,
 		FILE_ATTRIBUTE_NORMAL,
-		FILE_SEQUENTIAL_ONLY,
+		FILE_RANDOM_ACCESS,
 		FALSE,
 		NULL,
 		&hfile
@@ -2063,26 +2419,15 @@ NTSTATUS _app_update_downloadinstaller (
 	if (!NT_SUCCESS (status))
 		goto CleanupExit;
 
-	_r_inet_initializedownload (&download_info, hfile, NULL, NULL);
+	status = _app_http_getfile (hsession, &url->sr, hfile);
 
-	status = _r_inet_begindownload (hsession, &url->sr, &download_info);
-
-	_r_inet_destroydownload (&download_info);
-
-	if (status != STATUS_SUCCESS)
-	{
-		_r_log (LOG_LEVEL_WARNING, NULL, L"_r_inet_begindownload", status, url->buffer);
-
-		// winhttp reports positive error codes, which NT_SUCCESS would read as success
-		status = STATUS_UNSUCCESSFUL;
-
+	if (!NT_SUCCESS (status))
 		goto CleanupExit;
-	}
 
 	// verify the payload really is an executable and not an error response
 	file_size = 0;
 
-	status = _r_fs_getsize2 (&path->sr, NULL, &file_size);
+	status = _r_fs_getsize2 (NULL, hfile, &file_size);
 
 	if (status != STATUS_SUCCESS || file_size < UPDATE_MINIMUM_FILE_SIZE)
 	{
@@ -2090,7 +2435,10 @@ NTSTATUS _app_update_downloadinstaller (
 		goto CleanupExit;
 	}
 
-	status = _r_fs_createfile (&path->sr, FILE_OPEN, GENERIC_READ, FILE_SHARE_READ, 0, 0, FALSE, NULL, &hfile);
+	// checking the bytes we wrote through this handle - re-opening by path would leave a window for swapping the file
+	new_pos.QuadPart = 0;
+
+	status = _r_fs_setpos (hfile, &new_pos);
 
 	if (status != STATUS_SUCCESS)
 		goto CleanupExit;
@@ -2099,26 +2447,35 @@ NTSTATUS _app_update_downloadinstaller (
 
 	status = _r_fs_readfile (hfile, signature, sizeof (signature), &readed_length);
 
-	NtClose (hfile);
-
 	if (status != STATUS_SUCCESS || readed_length != sizeof (signature) || signature[0] != 'M' || signature[1] != 'Z')
+	{
 		status = STATUS_DATA_ERROR;
+		goto CleanupExit;
+	}
+
+	new_pos.QuadPart = 0;
+
+	status = _r_fs_setpos (hfile, &new_pos);
+
+	if (status != STATUS_SUCCESS)
+		goto CleanupExit;
 
 	// an MZ header is trivial to forge - refuse to run a payload not matching the published hash
-	if (status == STATUS_SUCCESS && hash)
+	status = _r_crypt_getfilehash (UPDATE_HASH_ALGORITHM, NULL, hfile, &file_hash);
+
+	if (NT_SUCCESS (status))
 	{
-		status = _r_crypt_getfilehash (UPDATE_HASH_ALGORITHM, &path->sr, NULL, &file_hash);
+		if (_r_str_compare (file_hash->buffer, hash->buffer, TRUE) != 0)
+			status = STATUS_DATA_ERROR;
 
-		if (NT_SUCCESS (status))
-		{
-			if (_r_str_compare (file_hash->buffer, hash->buffer, TRUE) != 0)
-				status = STATUS_DATA_ERROR;
-
-			_r_obj_dereference (file_hash);
-		}
+		_r_obj_dereference (file_hash);
+		file_hash = NULL;
 	}
 
 CleanupExit:
+
+	if (hfile)
+		NtClose (hfile);
 
 	if (status == STATUS_SUCCESS)
 	{
@@ -2132,6 +2489,14 @@ CleanupExit:
 	}
 
 	return status;
+}
+
+// the main window can be destroyed while this thread runs, and a recycled handle would parent the dialog onto an unrelated window
+HWND _app_update_parent (
+	_In_ HWND hwnd
+)
+{
+	return IsWindow (hwnd) ? hwnd : NULL;
 }
 
 NTSTATUS NTAPI _app_update_thread (
@@ -2168,7 +2533,7 @@ NTSTATUS NTAPI _app_update_thread (
 		status = STATUS_UNSUCCESSFUL;
 
 		if (!task.is_silent)
-			_r_show_errormessage (task.hwnd, L"Could not create internet session!", NtLastError (), NULL, ET_WINHTTP);
+			_r_show_errormessage (_app_update_parent (task.hwnd), L"Could not create internet session!", NtLastError (), NULL, ET_WINHTTP);
 
 		goto CleanupExit;
 	}
@@ -2178,7 +2543,7 @@ NTSTATUS NTAPI _app_update_thread (
 	if (!NT_SUCCESS (status))
 	{
 		if (!task.is_silent)
-			_r_show_errormessage (task.hwnd, _r_locale_getstring (IDS_UPDATE_ERROR), status, NULL, ET_WINHTTP);
+			_r_show_errormessage (_app_update_parent (task.hwnd), _r_locale_getstring (IDS_UPDATE_ERROR), status, NULL, ET_WINHTTP);
 
 		goto CleanupExit;
 	}
@@ -2188,12 +2553,12 @@ NTSTATUS NTAPI _app_update_thread (
 	if (_r_str_versioncompare (&current_ref, &version->sr) != -1)
 	{
 		if (!task.is_silent)
-			_r_show_message (task.hwnd, MB_OK | MB_ICONINFORMATION, _r_app_getname (), _r_locale_getstring (IDS_UPDATE_NO));
+			_r_show_message (_app_update_parent (task.hwnd), MB_OK | MB_ICONINFORMATION, _r_app_getname (), _r_locale_getstring (IDS_UPDATE_NO));
 
 		goto CleanupExit;
 	}
 
-	if (!_r_show_confirmmessage (task.hwnd, _r_app_getname (), _r_locale_getstring (IDS_UPDATE_YES), NULL, FALSE))
+	if (!_r_show_confirmmessage (_app_update_parent (task.hwnd), _r_app_getname (), _r_locale_getstring (IDS_UPDATE_YES), NULL, FALSE))
 	{
 		status = STATUS_CANCELLED;
 
@@ -2204,7 +2569,7 @@ NTSTATUS NTAPI _app_update_thread (
 
 	if (!NT_SUCCESS (status))
 	{
-		_r_show_errormessage (task.hwnd, _r_locale_getstring (IDS_UPDATE_ERROR), status, url->buffer, ET_WINHTTP);
+		_r_show_errormessage (_app_update_parent (task.hwnd), _r_locale_getstring (IDS_UPDATE_ERROR), status, url->buffer, ET_WINHTTP);
 
 		goto CleanupExit;
 	}
@@ -2221,7 +2586,7 @@ NTSTATUS NTAPI _app_update_thread (
 	}
 	else
 	{
-		_r_show_errormessage (task.hwnd, L"Could not start installer!", status, path->buffer, ET_NATIVE);
+		_r_show_errormessage (_app_update_parent (task.hwnd), L"Could not start installer!", status, path->buffer, ET_NATIVE);
 	}
 
 CleanupExit:
@@ -2307,10 +2672,15 @@ VOID _app_initialize (
 		SE_PROF_SINGLE_PROCESS_PRIVILEGE,
 		SE_INCREASE_QUOTA_PRIVILEGE,
 	};
+	NTSTATUS status;
 
 	if (_r_sys_iselevated ())
 	{
-		_r_sys_setprocessprivilege (NtCurrentProcess (), privileges, RTL_NUMBER_OF (privileges), TRUE);
+		status = _r_sys_setprocessprivilege (NtCurrentProcess (), privileges, RTL_NUMBER_OF (privileges), TRUE);
+
+		// STATUS_NOT_ALL_ASSIGNED is success, but the cleaning that needs the missing privilege silently fails
+		if (status != STATUS_SUCCESS)
+			_r_log (LOG_LEVEL_WARNING, NULL, L"_r_sys_setprocessprivilege", status, L"SeProfileSingleProcessPrivilege");
 	}
 	else
 	{
@@ -2498,6 +2868,10 @@ INT_PTR CALLBACK DlgProc (
 					_r_listview_setitem (hwnd, IDC_LISTVIEW, k++, 0, _r_locale_getstring (IDS_ITEM_1 + j), I_DEFAULT, I_DEFAULT, I_DEFAULT);
 				}
 			}
+
+			// the numbers and the group names are locale dependent, so drop the strings cached for the update skip
+			RtlZeroMemory (config.item_prev, sizeof (config.item_prev));
+			RtlZeroMemory (config.tooltip_prev, sizeof (config.tooltip_prev));
 
 			// configure button
 			_r_ctrl_setstring (hwnd, IDC_CLEAN, _r_locale_getstring (IDS_CLEAN));
@@ -2734,7 +3108,6 @@ INT_PTR CALLBACK DlgProc (
 				case WM_CONTEXTMENU:
 				{
 					HMENU hmenu, hsubmenu, hsubmenu_interval, hsubmenu_limit, hsubmenu_region;
-					PR_STRING format_interval;
 					ULONG mask;
 
 					SetForegroundWindow (hwnd); // don't touch
@@ -2809,7 +3182,7 @@ INT_PTR CALLBACK DlgProc (
 							IDX_TRAY_POPUP_1,
 							limits_arr,
 							RTL_NUMBER_OF (limits_arr),
-							L"%" TEXT (PR_ULONG) L"%%",
+							NULL,
 							_app_getlimitvalue (),
 							100,
 							_r_config_getboolean_ex (L"AutoreductEnable", FALSE, NULL)
@@ -2819,20 +3192,16 @@ INT_PTR CALLBACK DlgProc (
 					// configure submenu #3
 					if (hsubmenu_interval)
 					{
-						format_interval = _r_obj_concatstrings (2, L"%" TEXT (PR_ULONG) L" ", _r_locale_getstring (IDS_MINUTES));
-
 						_app_generate_menu (
 							hsubmenu_interval,
 							IDX_TRAY_POPUP_2,
 							intervals_arr,
 							RTL_NUMBER_OF (intervals_arr),
-							format_interval->buffer,
+							_r_locale_getstring (IDS_MINUTES),
 							_app_getintervalvalue (),
 							1440,
 							_r_config_getboolean_ex (L"AutoreductIntervalEnable", FALSE, NULL)
 						);
-
-						_r_obj_dereference (format_interval);
 					}
 
 					_r_menu_popup (hsubmenu, hwnd, NULL, 0);

@@ -208,10 +208,10 @@ STYLE WS_CHILD | WS_SYSMENU | WS_TABSTOP | WS_GROUP | DS_SHELLFONT | DS_CONTROL
 EXSTYLE WS_EX_CONTROLPARENT
 FONT 8, "Ms Shell Dlg"
 {
-	GROUPBOX		"", IDC_TITLE_1, 0, 0, 260, 46
+	GROUPBOX		"", IDC_TITLE_1, 0, 0, 260, 72
 
-	AUTOCHECKBOX	"", IDC_ALLOWSTANDBYLISTCLEANUP_CHK, 8, 12, 244, 10
-	AUTOCHECKBOX	"", IDC_LOGRESULTS_CHK, 8, 24, 244, 10
+	AUTOCHECKBOX	"", IDC_ALLOWSTANDBYLISTCLEANUP_CHK, 8, 14, 244, 32, BS_MULTILINE
+	AUTOCHECKBOX	"", IDC_LOGRESULTS_CHK, 8, 50, 244, 12, BS_MULTILINE
 }
 
 //
@@ -220,12 +220,12 @@ FONT 8, "Ms Shell Dlg"
 STRINGTABLE
 {
 	IDS_UPDATE_NO "No updates available."
-	IDS_UPDATE_YES "Update available, download and install them?"
-	IDS_UPDATE_DOWNLOAD "Downloading update..."
-	IDS_UPDATE_DONE "Downloading update finished."
-	IDS_UPDATE_ERROR "Update server connection error."
+	IDS_UPDATE_YES "An update is available. Download and install it now?"
+	IDS_UPDATE_DOWNLOAD "Downloading the update..."
+	IDS_UPDATE_DONE "Update download finished."
+	IDS_UPDATE_ERROR "Cannot connect to the update server."
 	IDS_UPDATE_INIT "Checking for new releases..."
-	IDS_UPDATE_INSTALL "Update available, do you want to install them?"
+	IDS_UPDATE_INSTALL "An update is available. Do you want to install it?"
 
 	IDS_FILE "File"
 	IDS_VIEW "View"
@@ -265,7 +265,7 @@ STRINGTABLE
 	IDS_TITLE_1 "General configuration"
 	IDS_TITLE_2 "Language"
 	IDS_TITLE_3 "Memory regions to be cleaned"
-	IDS_TITLE_4 "Memory management"
+	IDS_TITLE_4 "Automatic cleaning"
 	IDS_TITLE_5 "Hotkeys (global)"
 	IDS_TITLE_6 "Style"
 	IDS_TITLE_7 "Color indication"
@@ -289,17 +289,17 @@ STRINGTABLE
 	IDS_TRAYUSETRANSPARENCY_CHK "Use transparent background"
 	IDS_TRAYSHOWBORDER_CHK "Show border"
 	IDS_TRAYROUNDCORNERS_CHK "Round corners"
-	IDS_TRAYCHANGEBG_CHK "Change background color (instead text and border)"
+	IDS_TRAYCHANGEBG_CHK "Change background color with memory usage"
 	IDS_TRAYUSEANTIALIASING_CHK "Use antialiasing"
 
 	IDS_FONT_HINT "Font:"
 	IDS_COLOR_TEXT_HINT "Text color"
 	IDS_COLOR_BACKGROUND_HINT "Background color"
-	IDS_COLOR_WARNING_HINT """Warning level"" color"
-	IDS_COLOR_DANGER_HINT """Danger level"" color"
+	IDS_COLOR_WARNING_HINT """Warning level"" background color"
+	IDS_COLOR_DANGER_HINT """Danger level"" background color"
 
-	IDS_TRAYLEVELWARNING_HINT """Warning level"" started at: (%)"
-	IDS_TRAYLEVELDANGER_HINT """Danger level"" started at: (%)"
+	IDS_TRAYLEVELWARNING_HINT """Warning level"" starts at: (%)"
+	IDS_TRAYLEVELDANGER_HINT """Danger level"" starts at: (%)"
 
 	IDS_TRAYACTIONSC_HINT "Single click:"
 	IDS_TRAYACTIONMC_HINT "Middle click:"
@@ -311,14 +311,14 @@ STRINGTABLE
 	IDS_SHOW_CLEAN_RESULT_CHK "Show memory cleaning results"
 
 	IDS_QUESTION "Are you sure you want to clean the memory?"
-	IDS_QUESTION_WARNING "Switching-on ""Standby list"" and ""Modified page list"" may freeze your computer for almost a minute or so, are you sure to enable this option?"
+	IDS_QUESTION_WARNING "Turning on ""Standby list"" and ""Modified page list"" may freeze your computer for up to a minute. Enable this option?"
 	IDS_QUESTION_RESET "Are you really sure you want to reset all application settings?"
 	IDS_QUESTION_FLAG_CHK "Do not ask again"
 
-	IDS_STATUS_CLEANED "Memory was released with %s result."
-	IDS_STATUS_NOPRIVILEGES "Required administrator privileges, please run program as administrator!"
+	IDS_STATUS_CLEANED "Freed %s of memory."
+	IDS_STATUS_NOPRIVILEGES "Administrator privileges are required. Please run the program as administrator."
 
-	IDS_NOTIFICATIONSOUND_CHK "Enable notifications sound"
+	IDS_NOTIFICATIONSOUND_CHK "Enable notification sound"
 
 	IDS_TITLE_ADVANCED "Advanced"
 
@@ -326,7 +326,7 @@ STRINGTABLE
 
 	IDS_UPDATE_SPEED "Speed"
 
-	IDS_ALLOWSTANDBYLISTCLEANUP_CHK "Allow ""Standby lists"" and ""Modified page list"" cleanup on autoreduct"
+	IDS_ALLOWSTANDBYLISTCLEANUP_CHK "Allow ""Standby list"", ""Standby list (without priority)"" and ""Modified page list"" cleanup when auto-cleaning"
 	IDS_LOGRESULTS_CHK "Log cleaning results into a debug log"
 
 	IDS_MEMREGION_WORKINGSET "Working set"

@@ -49,7 +49,18 @@ jobs:
         run: |
           $match = Select-String -Path memreduct/src/app.h -Pattern 'APP_VERSION\s+L"([0-9.]+)"' | Select-Object -First 1
           if (-not $match) { Write-Error 'APP_VERSION not found in src/app.h'; exit 1 }
-          "version=$($match.Matches[0].Groups[1].Value)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $version = $match.Matches[0].Groups[1].Value
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          # the installer url is built from APP_VERSION, so a disagreeing tag would break every self-update
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v.$version") {
+            Write-Error "tag '$($env:GITHUB_REF_NAME)' does not match v.$version (APP_VERSION)"
+            exit 1
+          }
+
+      - name: Check locale pack
+        shell: pwsh
+        run: |
+          if (-not (Test-Path memreduct/bin/memreduct.lng)) { Write-Error 'memreduct/bin/memreduct.lng is missing - nothing would translate the interface'; exit 1 }
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
@@ -76,7 +87,6 @@ jobs:
           choco install nsis --no-progress -y
           "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Append
           "C:\Program Files\7-Zip" | Out-File -FilePath $env:GITHUB_PATH -Append
-          pip install --quiet chardet
 
       - name: Package
         shell: pwsh
@@ -87,11 +97,31 @@ jobs:
       - name: Create portable zip
         shell: pwsh
         run: |
-          $stage = Join-Path $env:TEMP 'builder\memreduct'
+          $version = '${{ steps.version.outputs.version }}'
+          $stage = Join-Path $env:TEMP 'portable\memreduct'
           $desktop = Join-Path $env:USERPROFILE 'Desktop'
-          $zip = Join-Path $desktop ("memreduct-${{ steps.version.outputs.version }}-bin.zip")
+          $zip = Join-Path $desktop ("memreduct-$version-bin.zip")
+
+          # builder removes its own staging folder, so the archive is packed straight from the compiled binaries
+          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+
+          New-Item -ItemType Directory -Force -Path (Join-Path $stage '64'), (Join-Path $stage 'arm64') | Out-Null
+
+          $binaries = Get-ChildItem -Path memreduct/bin -Recurse -Filter memreduct.exe
+          $exe64 = $binaries | Where-Object { $_.FullName -notmatch 'arm64' } | Select-Object -First 1
+          $exearm = $binaries | Where-Object { $_.FullName -match 'arm64' } | Select-Object -First 1
+
+          if (-not $exe64 -or -not $exearm) { Write-Error 'no compiled memreduct.exe under memreduct/bin'; exit 1 }
+
+          Copy-Item $exe64.FullName (Join-Path $stage '64') -Force
+          Copy-Item $exearm.FullName (Join-Path $stage 'arm64') -Force
+          Copy-Item memreduct/bin/memreduct.lng, memreduct/bin/License.txt, memreduct/bin/Readme.txt $stage -Force
+
           if (Test-Path $zip) { Remove-Item $zip -Force }
+
           Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal
+
+          Get-ChildItem -Recurse $stage | Select-Object FullName, Length
           Get-ChildItem $desktop -Filter 'memreduct-*' | Select-Object Name, Length
 
       - name: Collect artifacts
@@ -147,7 +177,12 @@ jobs:
         run: |
           $match = Select-String -Path src/app.h -Pattern 'APP_VERSION\s+L"([0-9.]+)"' | Select-Object -First 1
           if (-not $match) { Write-Error 'APP_VERSION not found in src/app.h'; exit 1 }
-          "version=$($match.Matches[0].Groups[1].Value)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $version = $match.Matches[0].Groups[1].Value
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          if ($env:GITHUB_REF_NAME -ne "v.$version") {
+            Write-Error "tag '$($env:GITHUB_REF_NAME)' does not match v.$version (APP_VERSION)"
+            exit 1
+          }
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -159,4 +194,11 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$env:GITHUB_REF_NAME" --verify-tag --title "Mem Reduct ${{ steps.version.outputs.version }}" --generate-notes --latest (Get-ChildItem dist -File).FullName
+        run: |
+          $assets = (Get-ChildItem dist -File).FullName
+
+          if (-not $assets) { Write-Error 'dist is empty'; exit 1 }
+
+          # a re-run for the same tag must not fail, so top up the assets of the release that already exists
+          gh release create "$env:GITHUB_REF_NAME" --verify-tag --title "Mem Reduct ${{ steps.version.outputs.version }}" --generate-notes --latest $assets
+          if ($LASTEXITCODE -ne 0) { gh release upload "$env:GITHUB_REF_NAME" $assets --clobber }

@@ -27,6 +27,9 @@ DEFINE_GUID (GUID_TrayIcon, 0xAE9053F0, 0x8D59, 0x4803, 0x9A, 0xBB, 0x74, 0xAF, 
 // minimum pause (in seconds) between usage-based automatic cleanups
 #define AUTOREDUCT_COOLDOWN 30
 
+// routine never trims the debug log, so truncate it once it grows past this size (bytes)
+#define LOG_MAXIMUM_SIZE 0x100000
+
 // update channel (this fork)
 #define UPDATE_MANIFEST_URL L"https://raw.githubusercontent.com/ninokiru/Mem-Reduct/main/VERSION"
 #define UPDATE_RELEASE_URL_PREFIX L"https://github.com/ninokiru/Mem-Reduct/releases/download/"
@@ -39,9 +42,12 @@ DEFINE_GUID (GUID_TrayIcon, 0xAE9053F0, 0x8D59, 0x4803, 0x9A, 0xBB, 0x74, 0xAF, 
 // setup.exe is ~2MB; reject anything smaller (error page / truncated download)
 #define UPDATE_MINIMUM_FILE_SIZE 0x40000
 
-// optional third field of the manifest: sha256 of the installer, printed by the build workflow
+// required third field of the manifest: sha256 of the installer, printed by the build workflow
 #define UPDATE_HASH_ALGORITHM L"SHA256"
 #define UPDATE_HASH_HEX_LENGTH 64
+
+// the VERSION file is a few lines of text; a bigger answer is either broken or a denial of service attempt
+#define UPDATE_MAXIMUM_MANIFEST_SIZE 0x8000
 
 #define DEFAULT_DANGER_LEVEL 90
 #define DEFAULT_WARNING_LEVEL 70
@@ -93,6 +99,10 @@ typedef struct _STATIC_DATA
 	HICON hicon;
 	RECT icon_size;
 	ULONG ms_prev;
+
+	// last strings pushed to the tray tooltip and to the memory list, used to skip unchanged updates
+	WCHAR tooltip_prev[0x80];
+	WCHAR item_prev[0x09][0x20];
 } STATIC_DATA, *PSTATIC_DATA;
 
 typedef enum _CLEANUP_SOURCE_ENUM

@@ -1,10 +1,30 @@
-v0.0.2 (21 October 2026)
+v0.0.1 (22 October 2026)
+
+\- first build of the fork, based on upstream v3.5.2
+
+\- signed as Lumina, own update channel at ninokiru/Mem-Reduct
 
 \- fixed access violation in the update checker (the application crashed shortly after start when no proxy was configured)
 
 \- fixed installer download always failing on the executable signature check
 
 \- the downloaded installer is now executed only when its sha256 matches the VERSION manifest
+
+\- the sha256 field of the VERSION manifest is now mandatory: a record without it is refused before anything is downloaded
+
+\- the update channel is fetched with the application's own WinHTTP code (https only, certificate chain validation always on, no insecure retry, manifest answer capped at 32 KB) because the shared network helper silently retries a failed certificate check with the unknown-CA and wrong-usage flags ignored
+
+\- the installer is downloaded into a temporary file with a random name, then sized, checked and hashed through that single handle, so the payload cannot be swapped between writing and verifying
+
+\- errors reported by the update worker no longer attach their dialog to a main window that was already destroyed
+
+\- the cleaning summary message is only printed through a language pack string when that string is a well formed "%s" template, so an edited translation cannot crash it
+
+\- failing to acquire SeProfileSingleProcessPrivilege is written to the debug log instead of being ignored
+
+\- purging a single memory region from the tray menu now asks for confirmation, like a full clean does
+
+\- the tray badge no longer creates a zero-height font when the percentage text is squeezed into a small icon
 
 \- fixed standby list rows showing the untranslated region name instead of the formatted one
 
@@ -42,11 +62,15 @@ v0.0.2 (21 October 2026)
 
 \- removed the duplicated "(Language)" suffix from the language menu and settings title
 
-v0.0.1 (20 October 2026)
+\- the settings tray menu caption of the "Advanced" page no longer shows the "General configuration" title
 
-\- first build of the fork, based on upstream v3.5.2
+\- the "Allow standby lists cleanup" option now wraps over two lines instead of being cut off, in both languages
 
-\- signed as Lumina, own update channel at ninokiru/Mem-Reduct
+\- the memory list, the tray tooltip and the tray icon are now only rewritten when their values actually changed, which removes the per-second allocations and full list repaint of a long running session
+
+\- the tray tooltip text is rebuilt only when a displayed value changed, and the group rows no longer re-format identical numbers
+
+\- Vietnamese interface re-translated: 43 strings corrected (menu captions, colour rows, click actions, thresholds, update download wording, the freeze warning), including the mistranslations "Help" -> "Khac", "Website" -> "Ma nguon", "Show/Hide" -> "Bang dieu khien", "Text color" -> "Mau ty so" and "Single click" -> "Chuot trai"
 
 v3.5.2 (1 April 2025)
 

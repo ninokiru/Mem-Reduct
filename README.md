@@ -12,7 +12,7 @@
 -------
 
 <p align="center">
-	<a href="https://github.com/ninokiru/Mem-Reduct">ninokiru/Mem-Reduct</a> - maintained fork of <a href="https://github.com/henrypp/memreduct">henrypp/memreduct</a> (by Henry++), rebuilt as version 0.0.2 with fixes and its own update channel.
+	<a href="https://github.com/ninokiru/Mem-Reduct">ninokiru/Mem-Reduct</a> - maintained fork of <a href="https://github.com/henrypp/memreduct">henrypp/memreduct</a> (by Henry++), rebuilt as version 0.0.1 with fixes and its own update channel.
 </p>
 
 <p align="center">
@@ -48,7 +48,9 @@ This fork is maintained by Lumina and has no donation links of its own. If you w
 Binaries for this fork are built by [GitHub Actions](https://github.com/ninokiru/Mem-Reduct/actions/workflows/build.yml) and published to [Releases](https://github.com/ninokiru/Mem-Reduct/releases). Every release carries exactly two assets: the installer (`memreduct-<version>-setup.exe`) and the portable archive (`memreduct-<version>-bin.zip`). They are **not** GPG-signed with the upstream key below, so do not expect `memreduct.exe.sig` next to them.
 
 ### Automatic updates:
-The application reads its release channel from [`VERSION`](VERSION) on branch `main`. A record looks like `name=version|installer-url|sha256;` - the third field is optional, but when it is set the downloaded installer is hashed and compared before anything is executed with administrator rights. The build workflow prints the ready-to-paste line in its job summary, so after publishing a release copy that line into `VERSION`.
+The application reads its release channel from [`VERSION`](VERSION) on branch `main`. A record looks like `name=version|installer-url|sha256;` - the third field is **required**: the installer is hashed and must match before anything is executed with administrator rights, and a record without it is rejected as a connection error. The build workflow prints the ready-to-paste line in its job summary, so after publishing a release copy that line into `VERSION`.
+
+Both the manifest and the installer are fetched through the application's own WinHTTP code: HTTPS only, certificate chain validation always on (no insecure retry fallback), and the manifest answer is limited to 32 KB. The installer is written to a temporary file whose name is random, then sized, checked and hashed through that one handle, so a pre-created file cannot be swapped before it runs.
 
 Upstream signature reference (applies to `henrypp` releases only):
 

@@ -1,6 +1,8 @@
-v0.0.1 (20 October 2026)
+v0.0.1 (22 October 2026)
 - reset fork version to 0.0.1 with its own update channel
 - added automatic update check with direct in-app installer download
+- the update manifest sha256 is now mandatory and the download runs over https with certificate validation always on
+- the installer is downloaded to a randomly named temporary file and verified through that same handle before it runs
 - fixed build against current routine sdk (removed renamed and missing api calls)
 - fixed tray icon handle leak and drawing surface creation failures
 - fixed volume cache flush mount point query (buffer overflow / leak)
@@ -9,6 +11,11 @@ v0.0.1 (20 October 2026)
 - fixed settings: typed values in spin edit boxes are now saved
 - now close button (X) hides to tray instead of quitting
 - added session end handling (logoff / shutdown quits cleanly)
+- tray icon rendered with the interface font, ClearType and a colour that adapts to the warning and danger backgrounds
+- dark theme now follows the system switch without a restart, including an already open settings window
+- the list view, tray tooltip and tray icon are only redrawn when their values changed
+- purging a single memory region now asks for confirmation, like a full clean does
+- Vietnamese interface re-translated (43 strings) and the advanced page option now wraps instead of being cut off
 - updated documentation
 
 v3.5.2 (1 April 2025)

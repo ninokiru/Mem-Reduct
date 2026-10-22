@@ -15,10 +15,11 @@ if not exist "%VCVARS%" goto notfound
 
 call "%VCVARS%" amd64_arm64
 
-msbuild memreduct.sln -property:Configuration=Release -property:Platform=x64 -verbosity:normal
+rem both platforms are 64-bit, so without OutDir the arm64 binary overwrites the x64 one in bin\64
+msbuild memreduct.sln -property:Configuration=Release -property:Platform=x64 -property:OutDir=bin\64\ -property:IntDir=obj\64\ -verbosity:normal
 if %ERRORLEVEL% neq 0 goto failed
 
-msbuild memreduct.sln -property:Configuration=Release -property:Platform=ARM64 -verbosity:normal
+msbuild memreduct.sln -property:Configuration=Release -property:Platform=ARM64 -property:OutDir=bin\arm64\ -property:IntDir=obj\arm64\ -verbosity:normal
 if %ERRORLEVEL% neq 0 goto failed
 
 set "EXITCODE=0"
