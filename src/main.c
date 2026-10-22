@@ -2998,7 +2998,7 @@ INT_PTR CALLBACK DlgProc (
 						_r_wnd_adjustrectangletoworkingarea (&rectangle, nmlp->hwndFrom);
 						_r_wnd_rectangletorect (&rect, &rectangle);
 
-						_r_menu_popup (hmenu, hwnd, (PPOINT)&rect, 0);
+						_r_menu_popup (hmenu, hwnd, (PPOINT)&rect, TRUE);
 					}
 
 					DestroyMenu (hmenu);
@@ -3204,7 +3204,7 @@ INT_PTR CALLBACK DlgProc (
 						);
 					}
 
-					_r_menu_popup (hsubmenu, hwnd, NULL, 0);
+					_r_menu_popup (hsubmenu, hwnd, NULL, TRUE);
 
 					DestroyMenu (hmenu);
 
