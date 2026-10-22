@@ -281,7 +281,7 @@ VOID _app_log_rotate ()
 	// routine only appends to the debug log, so empty it once in a while to stop a long run filling the disk
 	status = _r_fs_createfile (
 		&log_path->sr,
-		FILE_TRUNCATE_IF_EXISTS,
+		FILE_OVERWRITE,
 		GENERIC_WRITE,
 		FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 		FILE_ATTRIBUTE_NORMAL,
@@ -883,7 +883,7 @@ BOOLEAN _app_listviewsettext (
 	_In_ HWND hwnd,
 	_In_ INT item_id,
 	_In_ INT subitem_id,
-	_In_ LPCWSTR text
+	_In_ LPWSTR text
 )
 {
 	// pushing an unchanged string still repaints the row, so remember what the list already shows
