@@ -62,6 +62,28 @@ jobs:
         run: |
           if (-not (Test-Path memreduct/bin/memreduct.lng)) { Write-Error 'memreduct/bin/memreduct.lng is missing - nothing would translate the interface'; exit 1 }
 
+      - name: Check update manifest
+        shell: pwsh
+        run: |
+          # the app only accepts 'name=version|url|sha256;', so a broken line must never reach the default branch unnoticed
+          $line = (Get-Content memreduct/VERSION -Raw).Trim()
+
+          if ($line -match '^memreduct=[0-9.]+\|[^|]+\|[0-9a-f]{64};$') {
+            Write-Host "update manifest ok"
+          } elseif ($line -match '^memreduct=[0-9.]+\|[^|]+;$') {
+            Write-Warning 'VERSION has no sha256 field: the in-app updater refuses such a manifest.'
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**VERSION has no sha256 field** - the updater will report an invalid manifest until the line printed by the release job is pasted into it."
+          } else {
+            Write-Error "VERSION is not a 'name=version|url[|sha256];' record: $line"
+            exit 1
+          }
+
+          $url = ($line -split '\|')[1]
+          if (-not $url.StartsWith("https://github.com/$env:GITHUB_REPOSITORY/releases/download/")) {
+            Write-Error "the installer url must point at this repository, got $url"
+            exit 1
+          }
+
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
         with:

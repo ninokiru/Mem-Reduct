@@ -30,6 +30,10 @@ DEFINE_GUID (GUID_TrayIcon, 0xAE9053F0, 0x8D59, 0x4803, 0x9A, 0xBB, 0x74, 0xAF, 
 // routine never trims the debug log, so truncate it once it grows past this size (bytes)
 #define LOG_MAXIMUM_SIZE 0x100000
 
+// project links: routine builds them from the "henrypp" owner, so they are declared here instead
+#define APP_WEBSITE_URL L"https://github.com/ninokiru/Mem-Reduct"
+#define APP_DONATE_URL L"https://github.com/henrypp/memreduct#donate"
+
 // update channel (this fork)
 #define UPDATE_MANIFEST_URL L"https://raw.githubusercontent.com/ninokiru/Mem-Reduct/main/VERSION"
 #define UPDATE_RELEASE_URL_PREFIX L"https://github.com/ninokiru/Mem-Reduct/releases/download/"

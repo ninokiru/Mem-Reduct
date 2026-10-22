@@ -15,6 +15,10 @@ v0.0.1 (22 October 2026)
 - dark theme now follows the system switch without a restart, including an already open settings window
 - the list view, tray tooltip and tray icon are only redrawn when their values changed
 - purging a single memory region now asks for confirmation, like a full clean does
+- the tray context menu and the clean button drop-down now actually run their commands
+- the website entry and the About dialog point at the fork repository instead of the upstream project
+- update failures now say which stage failed: invalid manifest or failed file verification, instead of blaming the connection
+- the build workflow checks the VERSION manifest format and the installer url on every run
 - Vietnamese interface re-translated (43 strings) and the advanced page option now wraps instead of being cut off
 - updated documentation
 

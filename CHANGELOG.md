@@ -4,6 +4,14 @@ v0.0.1 (22 October 2026)
 
 \- signed as Lumina, own update channel at ninokiru/Mem-Reduct
 
+\- the tray context menu and the drop-down of the clean button now run their commands (every entry was inert because the selected menu identifier was discarded)
+
+\- the "Website" entry and the About dialog point at ninokiru/Mem-Reduct; the About dialog is built by the fork and keeps the license footer and the link to the original author's donation page
+
+\- a refused update manifest and an installer that fails its sha256 check are now reported as verification errors instead of "cannot connect to the update server", and are written to the debug log even when the check ran unattended
+
+\- the build workflow validates `VERSION` on every run: a malformed record or an installer url outside this repository fails the build, a record without the sha256 field warns
+
 \- fixed access violation in the update checker (the application crashed shortly after start when no proxy was configured)
 
 \- fixed installer download always failing on the executable signature check

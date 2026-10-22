@@ -2542,8 +2542,19 @@ NTSTATUS NTAPI _app_update_thread (
 
 	if (!NT_SUCCESS (status))
 	{
-		if (!task.is_silent)
-			_r_show_errormessage (_app_update_parent (task.hwnd), _r_locale_getstring (IDS_UPDATE_ERROR), status, NULL, ET_WINHTTP);
+		// a rejected manifest means the answer did arrive but is not usable, so do not report it as a connection failure
+		if (status == STATUS_DATA_ERROR)
+		{
+			_r_log (LOG_LEVEL_ERROR, NULL, L"_app_update_query", status, L"The update manifest is not valid for this build.");
+
+			if (!task.is_silent)
+				_r_show_errormessage (_app_update_parent (task.hwnd), L"The update manifest is not valid.", status, NULL, ET_NATIVE);
+		}
+		else
+		{
+			if (!task.is_silent)
+				_r_show_errormessage (_app_update_parent (task.hwnd), _r_locale_getstring (IDS_UPDATE_ERROR), status, NULL, ET_WINHTTP);
+		}
 
 		goto CleanupExit;
 	}
@@ -2569,7 +2580,17 @@ NTSTATUS NTAPI _app_update_thread (
 
 	if (!NT_SUCCESS (status))
 	{
-		_r_show_errormessage (_app_update_parent (task.hwnd), _r_locale_getstring (IDS_UPDATE_ERROR), status, url->buffer, ET_WINHTTP);
+		// the payload was refused by its size or its sha256: it must never run and never look like a network error
+		if (status == STATUS_DATA_ERROR)
+		{
+			_r_log (LOG_LEVEL_ERROR, NULL, L"_app_update_downloadinstaller", status, L"The downloaded installer did not match the published hash.");
+
+			_r_show_errormessage (_app_update_parent (task.hwnd), L"The downloaded file failed verification.", status, url->buffer, ET_NATIVE);
+		}
+		else
+		{
+			_r_show_errormessage (_app_update_parent (task.hwnd), _r_locale_getstring (IDS_UPDATE_ERROR), status, url->buffer, ET_WINHTTP);
+		}
 
 		goto CleanupExit;
 	}
@@ -2718,6 +2739,53 @@ VOID _app_initialize (
 	_r_settings_addpage (IDD_SETTINGS_APPEARANCE, IDS_SETTINGS_APPEARANCE);
 	_r_settings_addpage (IDD_SETTINGS_TRAY, IDS_SETTINGS_TRAY);
 	_r_settings_addpage (IDD_SETTINGS_ADVANCED, IDS_TITLE_ADVANCED);
+}
+
+VOID _app_showaboutmessage (
+	_In_opt_ HWND hwnd
+)
+{
+	static BOOLEAN is_opened = FALSE;
+
+	TASKDIALOGCONFIG tdc = {0};
+	WCHAR buffer[0x200];
+
+	// routine's about dialog links the upstream repository, so this one is built from the fork urls
+	if (is_opened)
+		return;
+
+	is_opened = TRUE;
+
+	_r_str_printf (
+		buffer,
+		RTL_NUMBER_OF (buffer),
+		L"Version %s %s, %d-bit (Unicode)\r\n%s\r\n\r\n<a href=\"%s\">%s</a>",
+		_r_app_getversion (),
+		_r_app_getversiontype (),
+		_r_app_getarch (),
+		_r_app_getcopyright (),
+		APP_WEBSITE_URL,
+		APP_WEBSITE_URL
+	);
+
+	tdc.cbSize = sizeof (tdc);
+	tdc.dwFlags = TDF_ENABLE_HYPERLINKS | TDF_ALLOW_DIALOG_CANCELLATION | TDF_EXPAND_FOOTER_AREA | TDF_SIZE_TO_CONTENT;
+	tdc.hwndParent = hwnd;
+	tdc.hInstance = _r_sys_getimagebase ();
+	tdc.dwCommonButtons = TDCBF_OK_BUTTON;
+	tdc.pszWindowTitle = _r_locale_getstring (IDS_ABOUT);
+	tdc.pszMainInstruction = _r_app_getname ();
+	tdc.pszMainIcon = MAKEINTRESOURCEW (IDI_MAIN);
+	tdc.pszContent = buffer;
+	tdc.pfCallback = &_r_msg_callback;
+	tdc.pszCollapsedControlText = _r_locale_getstring (IDS_DONATE);
+	tdc.pszExpandedInformation = L"<a href=\"" APP_DONATE_URL L"\">github.com/henrypp/memreduct#donate</a>";
+	tdc.pszFooterIcon = TD_INFORMATION_ICON;
+	tdc.pszFooter = APP_ABOUT_FOOTER;
+
+	_r_msg_taskdialog (&tdc, NULL, NULL, NULL);
+
+	is_opened = FALSE;
 }
 
 INT_PTR CALLBACK DlgProc (
@@ -3537,7 +3605,7 @@ INT_PTR CALLBACK DlgProc (
 				case IDM_WEBSITE:
 				case IDM_TRAY_WEBSITE:
 				{
-					_r_shell_opendefault (_r_app_getwebsite_url ());
+					_r_shell_opendefault (APP_WEBSITE_URL);
 					break;
 				}
 
@@ -3550,7 +3618,7 @@ INT_PTR CALLBACK DlgProc (
 				case IDM_ABOUT:
 				case IDM_TRAY_ABOUT:
 				{
-					_r_show_aboutmessage (hwnd);
+					_app_showaboutmessage (hwnd);
 					break;
 				}
 			}
