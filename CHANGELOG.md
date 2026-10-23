@@ -12,6 +12,16 @@ v0.0.1 (22 October 2026)
 
 \- the build workflow validates `VERSION` on every run: a malformed record or an installer url outside this repository fails the build, a record without the sha256 field warns
 
+\- the update manifest is now read exactly as it is published: the sha256 is the last field of the record (the previous code asked for a fourth separator, so every correct manifest was refused and the updater could never install anything)
+
+\- the installer download is capped, both by the size the server announces and by the bytes actually written, so a hostile answer cannot fill the disk before the hash rejects it
+
+\- the auto-clean value boxes now follow the state of their checkbox instead of the checkbox being merely enabled: an unchecked option no longer leaves its threshold or interval editable
+
+\- `memreduct -clean` started without elevation now returns success when the administrative copy was launched, instead of reporting an application initialization failure
+
+\- a cleanup in which at least one memory region failed is now shown with an error notification rather than the ordinary one
+
 \- fixed access violation in the update checker (the application crashed shortly after start when no proxy was configured)
 
 \- fixed installer download always failing on the executable signature check

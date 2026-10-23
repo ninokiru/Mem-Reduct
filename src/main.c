@@ -423,6 +423,10 @@ VOID _app_memoryclean (
 	{
 		if (_r_app_runasadmin ())
 		{
+			// the elevated copy inherited the command line and does the cleaning, so report the handoff as done
+			if (src == SOURCE_CMDLINE)
+				cmdline_exit_code = ERROR_SUCCESS;
+
 			if (hwnd)
 				DestroyWindow (hwnd);
 		}
@@ -658,6 +662,10 @@ VOID _app_memoryclean (
 
 	_r_format_bytesize64 (buffer_cleaned_result, RTL_NUMBER_OF (buffer_cleaned_result), reduct_after);
 
+	// a region that failed is still listed among the cleaned ones, so the notification must not look like a plain success
+	if (is_failed)
+		flags = (flags & NIIF_NOSOUND) | NIIF_ERROR;
+
 	cleaned_message = _r_locale_getstring (IDS_STATUS_CLEANED);
 
 	// the message comes from a locale pack which the user can edit, so only print through it when it is well formed
@@ -672,7 +680,7 @@ VOID _app_memoryclean (
 		if (_r_config_getboolean_ex (L"BalloonCleanResults", TRUE, NULL) && hwnd)
 			_r_tray_popup (hwnd, &GUID_TrayIcon, flags, _r_app_getname (), buffer_result);
 		else
-			_r_show_message (hwnd, MB_OK | MB_ICONINFORMATION, _r_app_getname (), buffer_result);
+			_r_show_message (hwnd, MB_OK | (is_failed ? MB_ICONERROR : MB_ICONINFORMATION), _r_app_getname (), buffer_result);
 	}
 	else
 	{
@@ -1792,15 +1800,17 @@ INT_PTR CALLBACK SettingsProc (
 				case IDC_AUTOREDUCTENABLE_CHK:
 				{
 					HWND hbuddy;
+					BOOLEAN is_checked = _r_ctrl_isbuttonchecked (hwnd, ctrl_id);
+					// the box is only greyed out when the app is not elevated, so being enabled does not mean being checked
 					BOOLEAN is_enabled = _r_ctrl_isenabled (hwnd, ctrl_id);
 
 					hbuddy = _r_updown_getbuddy (hwnd, IDC_AUTOREDUCTVALUE);
 
 					if (hbuddy)
-						_r_ctrl_enable (hbuddy, 0, is_enabled);
+						_r_ctrl_enable (hbuddy, 0, is_checked && is_enabled);
 
 					if (is_enabled)
-						_r_config_setboolean_ex (L"AutoreductEnable", _r_ctrl_isbuttonchecked (hwnd, ctrl_id), NULL);
+						_r_config_setboolean_ex (L"AutoreductEnable", is_checked, NULL);
 
 					break;
 				}
@@ -1808,15 +1818,16 @@ INT_PTR CALLBACK SettingsProc (
 				case IDC_AUTOREDUCTINTERVALENABLE_CHK:
 				{
 					HWND hbuddy;
+					BOOLEAN is_checked = _r_ctrl_isbuttonchecked (hwnd, ctrl_id);
 					BOOLEAN is_enabled = _r_ctrl_isenabled (hwnd, ctrl_id);
 
 					hbuddy = _r_updown_getbuddy (hwnd, IDC_AUTOREDUCTINTERVALVALUE);
 
 					if (hbuddy)
-						_r_ctrl_enable (hbuddy, 0, is_enabled);
+						_r_ctrl_enable (hbuddy, 0, is_checked && is_enabled);
 
 					if (is_enabled)
-						_r_config_setboolean_ex (L"AutoreductIntervalEnable", _r_ctrl_isbuttonchecked (hwnd, ctrl_id), NULL);
+						_r_config_setboolean_ex (L"AutoreductIntervalEnable", is_checked, NULL);
 
 					break;
 				}
@@ -2210,6 +2221,7 @@ _Success_ (NT_SUCCESS (return))
 NTSTATUS _app_http_getfile (
 	_In_ HINTERNET hsession,
 	_In_ PR_STRINGREF url,
+	_In_ ULONG maximum_length,
 	_In_ HANDLE hfile
 )
 {
@@ -2217,18 +2229,28 @@ NTSTATUS _app_http_getfile (
 	HINTERNET hrequest;
 	PR_BYTE content_bytes;
 	ULONG total_readed = 0;
+	ULONG content_length;
 	ULONG allocated_length;
 	ULONG readed_length = 0;
 	ULONG win_status;
 	NTSTATUS status;
 
-	win_status = _app_http_openurl (hsession, url, &hconnect, &hrequest, NULL);
+	win_status = _app_http_openurl (hsession, url, &hconnect, &hrequest, &content_length);
 
 	if (win_status != ERROR_SUCCESS)
 	{
 		_r_log (LOG_LEVEL_WARNING, NULL, L"_app_http_openurl", (NTSTATUS)win_status, NULL);
 
 		return STATUS_UNSUCCESSFUL;
+	}
+
+	// refuse a server that announces more than an installer before a single byte is written (content length is 0 when it is not sent)
+	if (content_length && (content_length > maximum_length))
+	{
+		_r_inet_close (hrequest);
+		_r_inet_close (hconnect);
+
+		return STATUS_DATA_ERROR;
 	}
 
 	_r_sys_setthreadexecutionstate (ES_SYSTEM_REQUIRED | ES_CONTINUOUS);
@@ -2240,6 +2262,14 @@ NTSTATUS _app_http_getfile (
 
 	while (_r_inet_readrequest (hrequest, content_bytes->buffer, allocated_length, &readed_length, &total_readed))
 	{
+		// a chunked response has no content length, so the limit is checked while writing as well
+		if (total_readed > maximum_length)
+		{
+			status = STATUS_DATA_ERROR;
+
+			break;
+		}
+
 		status = _r_fs_writefile (hfile, content_bytes->buffer, readed_length);
 
 		if (!NT_SUCCESS (status))
@@ -2328,11 +2358,8 @@ NTSTATUS _app_update_query (
 	}
 
 	// the installer is started with admin rights, so a manifest without its sha256 is refused instead of trusted
-	if (!_r_str_splitatchar (&remaining_ref, L'|', &hash_ref, &remaining_ref))
-	{
-		status = STATUS_DATA_ERROR;
-		goto CleanupExit;
-	}
+	// the hash is the last field of the record: asking for another separator here would reject every valid manifest
+	hash_ref = remaining_ref;
 
 	if (!_app_update_isvalidhash (&hash_ref))
 	{
@@ -2419,7 +2446,7 @@ NTSTATUS _app_update_downloadinstaller (
 	if (!NT_SUCCESS (status))
 		goto CleanupExit;
 
-	status = _app_http_getfile (hsession, &url->sr, hfile);
+	status = _app_http_getfile (hsession, &url->sr, UPDATE_MAXIMUM_FILE_SIZE, hfile);
 
 	if (!NT_SUCCESS (status))
 		goto CleanupExit;
@@ -2583,7 +2610,7 @@ NTSTATUS NTAPI _app_update_thread (
 		// the payload was refused by its size or its sha256: it must never run and never look like a network error
 		if (status == STATUS_DATA_ERROR)
 		{
-			_r_log (LOG_LEVEL_ERROR, NULL, L"_app_update_downloadinstaller", status, L"The downloaded installer did not match the published hash.");
+			_r_log (LOG_LEVEL_ERROR, NULL, L"_app_update_downloadinstaller", status, L"The downloaded installer did not match the published hash or size.");
 
 			_r_show_errormessage (_app_update_parent (task.hwnd), L"The downloaded file failed verification.", status, url->buffer, ET_NATIVE);
 		}

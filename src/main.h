@@ -46,6 +46,9 @@ DEFINE_GUID (GUID_TrayIcon, 0xAE9053F0, 0x8D59, 0x4803, 0x9A, 0xBB, 0x74, 0xAF, 
 // setup.exe is ~2MB; reject anything smaller (error page / truncated download)
 #define UPDATE_MINIMUM_FILE_SIZE 0x40000
 
+// the installer is downloaded to disk before it is checked, so a hostile answer must not fill the drive
+#define UPDATE_MAXIMUM_FILE_SIZE 0x2000000
+
 // required third field of the manifest: sha256 of the installer, printed by the build workflow
 #define UPDATE_HASH_ALGORITHM L"SHA256"
 #define UPDATE_HASH_HEX_LENGTH 64

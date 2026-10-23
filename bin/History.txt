@@ -19,6 +19,10 @@ v0.0.1 (22 October 2026)
 - the website entry and the About dialog point at the fork repository instead of the upstream project
 - update failures now say which stage failed: invalid manifest or failed file verification, instead of blaming the connection
 - the build workflow checks the VERSION manifest format and the installer url on every run
+- the manifest sha256 is now read as the last field of the record, so a published manifest is accepted (it asked for a separator that the format does not have)
+- the installer download is now capped by the announced size and by the bytes written
+- the auto-clean value boxes now follow their checkbox state instead of its enabled state
+- a partially failed clean now shows an error notification, and -clean without elevation returns success when the elevated copy started
 - Vietnamese interface re-translated (43 strings) and the advanced page option now wraps instead of being cut off
 - updated documentation
 
