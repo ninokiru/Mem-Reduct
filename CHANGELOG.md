@@ -6,7 +6,7 @@ v0.0.1 (22 October 2026)
 
 \- the tray context menu and the drop-down of the clean button now run their commands (every entry was inert because the selected menu identifier was discarded)
 
-\- the "Website" entry and the About dialog point at ninokiru/Mem-Reduct; the About dialog is built by the fork and keeps the license footer and the link to the original author's donation page
+\- the "Website" entry and the About dialog point at ninokiru/Mem-Reduct; the About dialog is built by the fork and keeps only the version, the copyright of the original author and the license footer
 
 \- a refused update manifest and an installer that fails its sha256 check are now reported as verification errors instead of "cannot connect to the update server", and are written to the debug log even when the check ran unattended
 
@@ -17,6 +17,10 @@ v0.0.1 (22 October 2026)
 \- the installer download is capped, both by the size the server announces and by the bytes actually written, so a hostile answer cannot fill the disk before the hash rejects it
 
 \- the auto-clean value boxes now follow the state of their checkbox instead of the checkbox being merely enabled: an unchecked option no longer leaves its threshold or interval editable
+
+\- the spin arrows of the auto-clean options are now switched off together with their edit box, so a disabled option cannot have its stored value changed from the keyboard or the mouse
+
+\- a failed update request is logged with the address that failed instead of an empty description
 
 \- `memreduct -clean` started without elevation now returns success when the administrative copy was launched, instead of reporting an application initialization failure
 

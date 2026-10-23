@@ -148,7 +148,6 @@
 #define IDS_WEBSITE 8
 #define IDS_CHECKUPDATES 9
 #define IDS_ABOUT 10
-#define IDS_DONATE 11
 
 #define IDS_TRAY_SHOW 12
 #define IDS_TRAY_DISABLE 13

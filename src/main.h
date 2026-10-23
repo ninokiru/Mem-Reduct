@@ -30,9 +30,13 @@ DEFINE_GUID (GUID_TrayIcon, 0xAE9053F0, 0x8D59, 0x4803, 0x9A, 0xBB, 0x74, 0xAF, 
 // routine never trims the debug log, so truncate it once it grows past this size (bytes)
 #define LOG_MAXIMUM_SIZE 0x100000
 
-// project links: routine builds them from the "henrypp" owner, so they are declared here instead
+// the sdk builds the project url from the upstream owner, so it is declared here instead
 #define APP_WEBSITE_URL L"https://github.com/ninokiru/Mem-Reduct"
-#define APP_DONATE_URL L"https://github.com/henrypp/memreduct#donate"
+
+// the sdk footer links the license text through its own repository; this fork links its copy of the license
+#define APP_ABOUT_LICENSE L"This program is free software; you can redistribute it and/or modify it under the terms of " \
+	L"the <a href=\"https://github.com/ninokiru/Mem-Reduct/blob/main/LICENSE\">GNU General Public License 3</a> " \
+	L"as published by the Free Software Foundation."
 
 // update channel (this fork)
 #define UPDATE_MANIFEST_URL L"https://raw.githubusercontent.com/ninokiru/Mem-Reduct/main/VERSION"

@@ -1802,14 +1802,17 @@ INT_PTR CALLBACK SettingsProc (
 					HWND hbuddy;
 					BOOLEAN is_checked = _r_ctrl_isbuttonchecked (hwnd, ctrl_id);
 					// the box is only greyed out when the app is not elevated, so being enabled does not mean being checked
-					BOOLEAN is_enabled = _r_ctrl_isenabled (hwnd, ctrl_id);
+					BOOLEAN is_active = is_checked && _r_ctrl_isenabled (hwnd, ctrl_id);
 
 					hbuddy = _r_updown_getbuddy (hwnd, IDC_AUTOREDUCTVALUE);
 
 					if (hbuddy)
-						_r_ctrl_enable (hbuddy, 0, is_checked && is_enabled);
+						_r_ctrl_enable (hbuddy, 0, is_active);
 
-					if (is_enabled)
+					// the arrows of the up-down are not the buddy, so they must be switched off together with the edit
+					_r_ctrl_enable (hwnd, IDC_AUTOREDUCTVALUE, is_active);
+
+					if (_r_ctrl_isenabled (hwnd, ctrl_id))
 						_r_config_setboolean_ex (L"AutoreductEnable", is_checked, NULL);
 
 					break;
@@ -1819,14 +1822,16 @@ INT_PTR CALLBACK SettingsProc (
 				{
 					HWND hbuddy;
 					BOOLEAN is_checked = _r_ctrl_isbuttonchecked (hwnd, ctrl_id);
-					BOOLEAN is_enabled = _r_ctrl_isenabled (hwnd, ctrl_id);
+					BOOLEAN is_active = is_checked && _r_ctrl_isenabled (hwnd, ctrl_id);
 
 					hbuddy = _r_updown_getbuddy (hwnd, IDC_AUTOREDUCTINTERVALVALUE);
 
 					if (hbuddy)
-						_r_ctrl_enable (hbuddy, 0, is_checked && is_enabled);
+						_r_ctrl_enable (hbuddy, 0, is_active);
 
-					if (is_enabled)
+					_r_ctrl_enable (hwnd, IDC_AUTOREDUCTINTERVALVALUE, is_active);
+
+					if (_r_ctrl_isenabled (hwnd, ctrl_id))
 						_r_config_setboolean_ex (L"AutoreductIntervalEnable", is_checked, NULL);
 
 					break;
@@ -2166,7 +2171,7 @@ NTSTATUS _app_http_gettext (
 
 	if (win_status != ERROR_SUCCESS)
 	{
-		_r_log (LOG_LEVEL_WARNING, NULL, L"_app_http_openurl", (NTSTATUS)win_status, NULL);
+		_r_log (LOG_LEVEL_WARNING, NULL, L"_app_http_openurl", (NTSTATUS)win_status, url->buffer);
 
 		return STATUS_UNSUCCESSFUL;
 	}
@@ -2239,7 +2244,7 @@ NTSTATUS _app_http_getfile (
 
 	if (win_status != ERROR_SUCCESS)
 	{
-		_r_log (LOG_LEVEL_WARNING, NULL, L"_app_http_openurl", (NTSTATUS)win_status, NULL);
+		_r_log (LOG_LEVEL_WARNING, NULL, L"_app_http_openurl", (NTSTATUS)win_status, url->buffer);
 
 		return STATUS_UNSUCCESSFUL;
 	}
@@ -2796,7 +2801,7 @@ VOID _app_showaboutmessage (
 	);
 
 	tdc.cbSize = sizeof (tdc);
-	tdc.dwFlags = TDF_ENABLE_HYPERLINKS | TDF_ALLOW_DIALOG_CANCELLATION | TDF_EXPAND_FOOTER_AREA | TDF_SIZE_TO_CONTENT;
+	tdc.dwFlags = TDF_ENABLE_HYPERLINKS | TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
 	tdc.hwndParent = hwnd;
 	tdc.hInstance = _r_sys_getimagebase ();
 	tdc.dwCommonButtons = TDCBF_OK_BUTTON;
@@ -2805,10 +2810,8 @@ VOID _app_showaboutmessage (
 	tdc.pszMainIcon = MAKEINTRESOURCEW (IDI_MAIN);
 	tdc.pszContent = buffer;
 	tdc.pfCallback = &_r_msg_callback;
-	tdc.pszCollapsedControlText = _r_locale_getstring (IDS_DONATE);
-	tdc.pszExpandedInformation = L"<a href=\"" APP_DONATE_URL L"\">github.com/henrypp/memreduct#donate</a>";
 	tdc.pszFooterIcon = TD_INFORMATION_ICON;
-	tdc.pszFooter = APP_ABOUT_FOOTER;
+	tdc.pszFooter = APP_ABOUT_LICENSE;
 
 	_r_msg_taskdialog (&tdc, NULL, NULL, NULL);
 

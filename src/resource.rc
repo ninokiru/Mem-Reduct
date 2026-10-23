@@ -236,7 +236,6 @@ STRINGTABLE
 	IDS_WEBSITE "Website"
 	IDS_CHECKUPDATES "Check for updates"
 	IDS_ABOUT "About"
-	IDS_DONATE "Give thanks!"
 
 	IDS_TRAY_SHOW "Show/Hide"
 	IDS_TRAY_DISABLE "Disable"
