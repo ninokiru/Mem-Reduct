@@ -21,23 +21,23 @@ jobs:
     permissions:
       contents: read
       actions: write
-    runs-on: windows-2025-vs2026
+    runs-on: windows-2025
 
     steps:
       - name: Checkout application
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: memreduct
 
       - name: Checkout routine
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: henrypp/routine
           ref: 1acd9394395b7cee9e1ea7b985fb54e76be86b11
           path: routine
 
       - name: Checkout builder
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: henrypp/builder
           ref: 124afc79ce0462170d66df1922be5944dea85dfb
@@ -85,7 +85,7 @@ jobs:
           }
 
       - name: Setup MSBuild
-        uses: microsoft/setup-msbuild@v2
+        uses: microsoft/setup-msbuild@v3
         with:
           vs-version: '[18.0,19.0)'
 
@@ -114,10 +114,13 @@ jobs:
         shell: pwsh
         run: |
           $stage = Join-Path $env:TEMP 'pkg\memreduct'
+          $out = Join-Path $env:TEMP 'pkg\out'
 
           "stage=$stage" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "out=$out" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
           if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
 
           New-Item -ItemType Directory -Force -Path (Join-Path $stage '32'), (Join-Path $stage '64') | Out-Null
 
@@ -183,42 +186,53 @@ jobs:
         run: |
           $version = '${{ steps.version.outputs.version }}'
           $stage = '${{ steps.stage.outputs.stage }}'
-          $desktop = Join-Path $env:USERPROFILE 'Desktop'
-          $setup = Join-Path $desktop ("memreduct-$version-setup.exe")
+          $out = '${{ steps.stage.outputs.out }}'
+          $setup = Join-Path $out ("memreduct-$version-setup.exe")
 
           if (Test-Path $setup) { Remove-Item $setup -Force }
 
-          # the very makensis call build_package.py used to make, with the defines the script expects
-          $command = 'makensis.exe /V2 /DAPP_FILES_DIR="' + $stage + '" /DAPP_NAME="' + $env:APP_NAME + '" /DAPP_NAME_SHORT=' + $env:APP_NAME_SHORT + ' /DAPP_VERSION=' + $version + ' /X"OutFile ' + $setup + '" src\setup_script.nsi'
+          # the same defines build_package.py passed to makensis, kept as one argument each
+          $options = @(
+            '/V2',
+            ('/DAPP_FILES_DIR=' + $stage),
+            ('/DAPP_NAME=' + $env:APP_NAME),
+            ('/DAPP_NAME_SHORT=' + $env:APP_NAME_SHORT),
+            ('/DAPP_VERSION=' + $version),
+            ('/XOutFile "' + $setup + '"'),
+            'src\setup_script.nsi'
+          )
 
-          cmd /c $command
+          & makensis.exe @options
 
           if ($LASTEXITCODE -ne 0) { Write-Error "makensis failed with exit code $LASTEXITCODE"; exit 1 }
           if (-not (Test-Path $setup)) { Write-Error "makensis did not produce $setup"; exit 1 }
 
           Get-Item $setup | Select-Object FullName, Length
+
       - name: Create portable zip
         shell: pwsh
         run: |
           $version = '${{ steps.version.outputs.version }}'
           $stage = '${{ steps.stage.outputs.stage }}'
-          $desktop = Join-Path $env:USERPROFILE 'Desktop'
-          $zip = Join-Path $desktop ("memreduct-$version-bin.zip")
+          $out = '${{ steps.stage.outputs.out }}'
+          $zip = Join-Path $out ("memreduct-$version-bin.zip")
 
           if (Test-Path $zip) { Remove-Item $zip -Force }
 
           Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal
 
-          Get-ChildItem $desktop -Filter 'memreduct-*' | Select-Object Name, Length
+          Get-ChildItem $out -Filter 'memreduct-*' | Select-Object Name, Length
+
       - name: Collect artifacts
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $desktop = Join-Path $env:USERPROFILE 'Desktop'
+          $out = '${{ steps.stage.outputs.out }}'
           $version = '${{ steps.version.outputs.version }}'
           foreach ($pattern in @("memreduct-$version-setup.exe", "memreduct-$version-bin.zip")) {
-            $found = Get-ChildItem -Path $desktop -Filter $pattern -ErrorAction SilentlyContinue
-            if ($found) { Copy-Item $found.FullName dist/ -Force }
+            $found = Get-ChildItem -Path $out -Filter $pattern -ErrorAction SilentlyContinue
+            if (-not $found) { Write-Error "missing $pattern in $out - packaging did not produce it"; exit 1 }
+            Copy-Item $found.FullName dist/ -Force
           }
           Get-ChildItem dist
 
@@ -239,7 +253,7 @@ jobs:
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "Paste this line into VERSION on branch main after pushing the v.$version tag."
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: memreduct-${{ steps.version.outputs.version }}-windows
           path: dist/*
@@ -251,11 +265,11 @@ jobs:
     permissions:
       contents: write
       actions: read
-    runs-on: windows-2025-vs2026
+    runs-on: windows-2025
 
     steps:
       - name: Checkout application
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Read version
         id: version
@@ -271,7 +285,7 @@ jobs:
           }
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: memreduct-${{ steps.version.outputs.version }}-windows
           path: dist
