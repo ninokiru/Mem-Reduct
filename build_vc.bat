@@ -13,13 +13,16 @@ if not defined VCVARS for %%e in (Community Professional Enterprise BuildTools) 
 
 if not exist "%VCVARS%" goto notfound
 
-call "%VCVARS%" amd64_arm64
+rem every platform needs its own environment: the target include and lib paths are taken from vcvarsall
+call "%VCVARS%" amd64
 
-rem both platforms are 64-bit, so without OutDir the arm64 binary overwrites the x64 one in bin\64
+rem without OutDir both builds land in bin\64 and the second one overwrites the first
 msbuild memreduct.sln -property:Configuration=Release -property:Platform=x64 -property:OutDir=bin\64\ -property:IntDir=obj\64\ -verbosity:normal
 if %ERRORLEVEL% neq 0 goto failed
 
-msbuild memreduct.sln -property:Configuration=Release -property:Platform=ARM64 -property:OutDir=bin\arm64\ -property:IntDir=obj\arm64\ -verbosity:normal
+call "%VCVARS%" amd64_x86
+
+msbuild memreduct.sln -property:Configuration=Release -property:Platform=Win32 -property:OutDir=bin\32\ -property:IntDir=obj\32\ -verbosity:normal
 if %ERRORLEVEL% neq 0 goto failed
 
 set "EXITCODE=0"

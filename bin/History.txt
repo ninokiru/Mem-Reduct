@@ -28,6 +28,8 @@ v0.0.1 (22 October 2026)
 - a partially failed clean now shows an error notification, and -clean without elevation returns success when the elevated copy started
 - Vietnamese interface re-translated (43 strings) and the advanced page option now wraps instead of being cut off
 - updated documentation
+- removed the donate entry and the upstream funding link
+- added 32-bit (x86) binaries and dropped arm64: windows 10/11 32-bit and 64-bit only, the installer picks the payload that matches the running windows
 
 v3.5.2 (1 April 2025)
 - added modified file cache clean

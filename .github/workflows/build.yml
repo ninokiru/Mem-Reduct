@@ -94,10 +94,10 @@ jobs:
         working-directory: memreduct
         run: msbuild memreduct.sln -property:Configuration=Release -property:Platform=x64 -property:OutDir=bin\64\ -property:IntDir=obj\64\ -verbosity:minimal
 
-      - name: Build ARM64
+      - name: Build x86
         shell: cmd
         working-directory: memreduct
-        run: msbuild memreduct.sln -property:Configuration=Release -property:Platform=ARM64 -property:OutDir=bin\arm64\ -property:IntDir=obj\arm64\ -verbosity:minimal
+        run: msbuild memreduct.sln -property:Configuration=Release -property:Platform=Win32 -property:OutDir=bin\32\ -property:IntDir=obj\32\ -verbosity:minimal
 
       - name: Show binaries
         shell: pwsh
@@ -108,44 +108,108 @@ jobs:
         run: |
           choco install nsis --no-progress -y
           "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Append
-          "C:\Program Files\7-Zip" | Out-File -FilePath $env:GITHUB_PATH -Append
 
-      - name: Package
+      - name: Stage packages
+        id: stage
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:TEMP 'pkg\memreduct'
+
+          "stage=$stage" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+
+          New-Item -ItemType Directory -Force -Path (Join-Path $stage '32'), (Join-Path $stage '64') | Out-Null
+
+          foreach ($binary in @('memreduct/bin/64/memreduct.exe', 'memreduct/bin/32/memreduct.exe')) {
+            if (-not (Test-Path $binary)) { Write-Error "missing $binary - the build step did not produce it"; exit 1 }
+          }
+
+          Copy-Item memreduct/bin/64/memreduct.exe (Join-Path $stage '64') -Force
+          Copy-Item memreduct/bin/32/memreduct.exe (Join-Path $stage '32') -Force
+
+          # the installer reads its license and locale pack from the 64-bit folder, the archive keeps them everywhere
+          foreach ($document in @('History.txt', 'License.txt', 'Readme.txt', 'memreduct.lng')) {
+            $source = Join-Path 'memreduct/bin' $document
+
+            if (-not (Test-Path $source)) { Write-Error "missing $source"; exit 1 }
+
+            Copy-Item $source $stage -Force
+            Copy-Item $source (Join-Path $stage '32') -Force
+            Copy-Item $source (Join-Path $stage '64') -Force
+          }
+
+          # portable mode is switched on by this marker, so it must sit next to every archived binary
+          foreach ($architecture in @('32', '64')) {
+            Set-Content -Path (Join-Path $stage ($architecture + '\portable.dat')) -Value '#PORTABLE#' -NoNewline -Encoding ascii
+          }
+
+          Get-ChildItem -Recurse $stage | Select-Object FullName, Length
+
+      - name: Teach the installer both architectures
         shell: pwsh
         working-directory: builder
         run: |
-          python src/build_package.py --name-short=$env:APP_NAME_SHORT --version=${{ steps.version.outputs.version }} --name="$env:APP_NAME"
+          $nsi = 'src/setup_script.nsi'
+          $text = Get-Content -Path $nsi -Raw
 
+          $nl = "`n"
+          if ($text.Contains("`r`n")) { $nl = "`r`n" }
+
+          # builder ships a 64-bit and an ARM64 payload, this fork ships a 32-bit and a 64-bit one
+          $selection = [regex]::Match($text, '(?s)\$\{If\} \$\{IsNativeARM64\}.*?\$\{EndIf\}')
+
+          if (-not $selection.Success) { Write-Error 'the arm64 selection block is gone - builder changed its script'; exit 1 }
+
+          $payload = @'
+          ${If} ${RunningX64}
+            File "${APP_FILES_DIR}\64\${APP_NAME_SHORT}.exe"
+            ${Else}
+            File "${APP_FILES_DIR}\32\${APP_NAME_SHORT}.exe"
+            ${EndIf}
+          '@
+
+          $text = $text.Replace($selection.Value, (($payload.Trim()) -replace "`r?`n", $nl))
+
+          if ($text.Contains('IsNativeARM64')) { Write-Error 'an arm64 reference is left in the installer script'; exit 1 }
+
+          Set-Content -Path $nsi -Value $text -NoNewline -Encoding utf8NoBOM
+
+          Select-String -Path $nsi -Pattern 'APP_FILES_DIR|RunningX64' | Select-Object LineNumber, Line
+
+      - name: Build installer
+        shell: pwsh
+        working-directory: builder
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $stage = '${{ steps.stage.outputs.stage }}'
+          $desktop = Join-Path $env:USERPROFILE 'Desktop'
+          $setup = Join-Path $desktop ("memreduct-$version-setup.exe")
+
+          if (Test-Path $setup) { Remove-Item $setup -Force }
+
+          # the very makensis call build_package.py used to make, with the defines the script expects
+          $command = 'makensis.exe /V2 /DAPP_FILES_DIR="' + $stage + '" /DAPP_NAME="' + $env:APP_NAME + '" /DAPP_NAME_SHORT=' + $env:APP_NAME_SHORT + ' /DAPP_VERSION=' + $version + ' /X"OutFile ' + $setup + '" src\setup_script.nsi'
+
+          cmd /c $command
+
+          if ($LASTEXITCODE -ne 0) { Write-Error "makensis failed with exit code $LASTEXITCODE"; exit 1 }
+          if (-not (Test-Path $setup)) { Write-Error "makensis did not produce $setup"; exit 1 }
+
+          Get-Item $setup | Select-Object FullName, Length
       - name: Create portable zip
         shell: pwsh
         run: |
           $version = '${{ steps.version.outputs.version }}'
-          $stage = Join-Path $env:TEMP 'portable\memreduct'
+          $stage = '${{ steps.stage.outputs.stage }}'
           $desktop = Join-Path $env:USERPROFILE 'Desktop'
           $zip = Join-Path $desktop ("memreduct-$version-bin.zip")
-
-          # builder removes its own staging folder, so the archive is packed straight from the compiled binaries
-          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
-
-          New-Item -ItemType Directory -Force -Path (Join-Path $stage '64'), (Join-Path $stage 'arm64') | Out-Null
-
-          $binaries = Get-ChildItem -Path memreduct/bin -Recurse -Filter memreduct.exe
-          $exe64 = $binaries | Where-Object { $_.FullName -notmatch 'arm64' } | Select-Object -First 1
-          $exearm = $binaries | Where-Object { $_.FullName -match 'arm64' } | Select-Object -First 1
-
-          if (-not $exe64 -or -not $exearm) { Write-Error 'no compiled memreduct.exe under memreduct/bin'; exit 1 }
-
-          Copy-Item $exe64.FullName (Join-Path $stage '64') -Force
-          Copy-Item $exearm.FullName (Join-Path $stage 'arm64') -Force
-          Copy-Item memreduct/bin/memreduct.lng, memreduct/bin/License.txt, memreduct/bin/Readme.txt $stage -Force
 
           if (Test-Path $zip) { Remove-Item $zip -Force }
 
           Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal
 
-          Get-ChildItem -Recurse $stage | Select-Object FullName, Length
           Get-ChildItem $desktop -Filter 'memreduct-*' | Select-Object Name, Length
-
       - name: Collect artifacts
         shell: pwsh
         run: |

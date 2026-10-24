@@ -38,14 +38,14 @@ memreduct.exe -clean:full  // clear all memory regions
 
 ### System requirements:
 - Windows 10 version 21H1 (build 19043) or later, including Windows 11
-- 64-bit (x64) or ARM64
+- 32-bit (x86) or 64-bit (x64)
 - An SSE2-capable CPU
 
 ### Support:
 This fork is maintained by Lumina and is free of charge - the About dialog only points at this repository.
 
 ### Build & signature:
-Binaries for this fork are built by [GitHub Actions](https://github.com/ninokiru/Mem-Reduct/actions/workflows/build.yml) and published to [Releases](https://github.com/ninokiru/Mem-Reduct/releases). Every release carries exactly two assets: the installer (`memreduct-<version>-setup.exe`) and the portable archive (`memreduct-<version>-bin.zip`). They are neither code-signed nor GPG-signed, so there is no `.sig` next to them - the only integrity check the application makes is the sha256 published in [`VERSION`](VERSION).
+Binaries for this fork are built by [GitHub Actions](https://github.com/ninokiru/Mem-Reduct/actions/workflows/build.yml) and published to [Releases](https://github.com/ninokiru/Mem-Reduct/releases). Every release carries exactly two assets: the installer (`memreduct-<version>-setup.exe`) and the portable archive (`memreduct-<version>-bin.zip`). They are neither code-signed nor GPG-signed, so there is no `.sig` next to them - the only integrity check the application makes is the sha256 published in [`VERSION`](VERSION). The portable archive keeps the two builds in a `32` and a `64` folder - on a 64-bit Windows run `64\memreduct.exe`, because the 32-bit build refuses to start under WoW64 unless it is given `-nowow64`. The installer picks the payload that matches the running Windows by itself.
 
 ### Automatic updates:
 The application reads its release channel from [`VERSION`](VERSION) on branch `main`. A record looks like `name=version|installer-url|sha256;` - the third field is **required**: the installer is hashed and must match before anything is executed with administrator rights, and a record without it is refused as an invalid manifest. The build workflow prints the ready-to-paste line in its job summary, so after publishing a release copy that line into `VERSION`.

@@ -94,6 +94,10 @@ v0.0.1 (22 October 2026)
 
 \- Vietnamese interface re-translated: 43 strings corrected (menu captions, colour rows, click actions, thresholds, update download wording, the freeze warning), including the mistranslations "Help" -> "Khac", "Website" -> "Ma nguon", "Show/Hide" -> "Bang dieu khien", "Text color" -> "Mau ty so" and "Single click" -> "Chuot trai"
 
+\- the "Give thanks!" entry and the upstream funding link are gone from the help menu, the tray menu and the About dialog
+
+\- releases now ship a 32-bit (x86) and a 64-bit (x64) build for Windows 10 and Windows 11 and no longer build arm64: the installer installs the payload that matches the running Windows, and the portable archive keeps both builds in the "32" and "64" folders
+
 v3.5.2 (1 April 2025)
 
 \- added modified file cache clean
