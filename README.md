@@ -47,8 +47,19 @@ This fork is maintained by Lumina and is free of charge - the About dialog only 
 ### Build & signature:
 Binaries for this fork are built by [GitHub Actions](https://github.com/ninokiru/Mem-Reduct/actions/workflows/build.yml) and published to [Releases](https://github.com/ninokiru/Mem-Reduct/releases). Every release carries exactly two assets: the installer (`memreduct-<version>-setup.exe`) and the portable archive (`memreduct-<version>-bin.zip`). They are neither code-signed nor GPG-signed, so there is no `.sig` next to them - the only integrity check the application makes is the sha256 published in [`VERSION`](VERSION). The portable archive keeps the two builds in a `32` and a `64` folder - on a 64-bit Windows run `64\memreduct.exe`, because the 32-bit build refuses to start under WoW64 unless it is given `-nowow64`. The installer picks the payload that matches the running Windows by itself.
 
+### Build from source:
+Release binaries come from GitHub Actions, but this is a plain Win32 C solution and `build_vc.bat` builds it locally with Visual Studio 2026 (18.x), producing `bin\64\memreduct.exe` and `bin\32\memreduct.exe`.
+
+The dependencies are submodules whose recorded paths are `../routine` and `../builder` - one level **above** the repository - so `git clone --recursive` cannot check them out. Put them next to this folder by hand instead:
+
+```
+Mem-Reduct/   this repository (build_vc.bat runs here)
+../routine/   https://github.com/henrypp/routine   (CI pins 1acd9394395b7cee9e1ea7b985fb54e76be86b11)
+../builder/   https://github.com/henrypp/builder   (CI pins 124afc79ce0462170d66df1922be5944dea85dfb)
+```
+
 ### Automatic updates:
-The application reads its release channel from [`VERSION`](VERSION) on branch `main`. A record looks like `name=version|installer-url|sha256;` - the third field is **required**: the installer is hashed and must match before anything is executed with administrator rights, and a record without it is refused as an invalid manifest. The build workflow prints the ready-to-paste line in its job summary, so after publishing a release copy that line into `VERSION`.
+The application reads its release channel from [`VERSION`](VERSION) on branch `main`. A record looks like `name=version|installer-url|sha256;` - the third field is **required**: the installer is hashed and must match before anything is executed with administrator rights, and a record without it is refused as an invalid manifest. Nobody writes that field by hand: pushing a `v.<version>` tag builds the release, and the release job hashes the installer it has just uploaded and commits the finished record back to `VERSION` on branch `main` (it refuses to overwrite a channel that already points at a newer version). The build job prints the same line in its job summary for the case where that commit is blocked by branch protection.
 
 Both the manifest and the installer are fetched through the application's own WinHTTP code: HTTPS only, certificate chain validation always on (no insecure retry fallback), the manifest answer is limited to 32 KB and the installer download to 32 MB (checked both in the announced size and in the bytes actually written). The installer is written to a temporary file whose name is random, then sized, checked and hashed through that one handle, so nothing can be swapped into it while it is downloaded and verified. The handle is closed before the shell starts the file, which leaves a short window after verification; closing it completely would need an ACL the installer can still read through, and the payload stays in a temporary directory whose name is randomly generated, so only a process already running as this user - and able to see that name - could use it.
 

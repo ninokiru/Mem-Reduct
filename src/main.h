@@ -14,12 +14,31 @@ DEFINE_GUID (GUID_TrayIcon, 0xAE9053F0, 0x8D59, 0x4803, 0x9A, 0xBB, 0x74, 0xAF, 
 #define TIMER 1000
 #define UID 1337
 
-#define LANG_SUBMENU 1
-#define LANG_MENU 4
+// position of the language submenu inside the flat main menu
+#define LANG_MENU 11
 
 #define TRAY_SUBMENU_1 4
 #define TRAY_SUBMENU_2 5
 #define TRAY_SUBMENU_3 6
+
+// main window metrics (96 dpi, scaled at runtime)
+#define UI_WIDTH 400
+#define UI_HEIGHT 360
+#define UI_PAD 16
+#define UI_HEADER_TOP 12
+#define UI_HEADER_HEIGHT 28
+#define UI_OVERFLOW_SIZE 28
+#define UI_CARD_TOP 52
+#define UI_CARD_BOTTOM 266
+#define UI_ACTIONS_TOP 280
+#define UI_ACTIONS_HEIGHT 40
+#define UI_SPLIT_WIDTH 44
+#define UI_FOOTER_TOP 330
+#define UI_FOOTER_HEIGHT 16
+#define UI_CARD_RADIUS 8
+#define UI_CONTROL_RADIUS 6
+#define UI_BAR_HEIGHT 6
+#define UI_ROW_HEIGHT 56
 
 #define DEFAULT_AUTOREDUCT_VAL 90
 #define DEFAULT_AUTOREDUCTINTERVAL_VAL 30
@@ -111,9 +130,27 @@ typedef struct _STATIC_DATA
 	RECT icon_size;
 	ULONG ms_prev;
 
-	// last strings pushed to the tray tooltip and to the memory list, used to skip unchanged updates
+	// last strings pushed to the tray tooltip, used to skip unchanged updates
 	WCHAR tooltip_prev[0x80];
-	WCHAR item_prev[0x09][0x20];
+
+	// main window fonts, recreated on dpi change
+	HFONT hfont_ui_hero;
+	HFONT hfont_ui_title;
+	HFONT hfont_ui_body;
+	HFONT hfont_ui_bodybold;
+	HFONT hfont_ui_small;
+	HFONT hfont_ui_smallbold;
+
+	// main window values, cached so the paint code does no formatting
+	WCHAR ui_hero_percent[0x08];
+	WCHAR ui_hero_used[0x20];
+	WCHAR ui_hero_free[0x20];
+	WCHAR ui_metric_percent[0x02][0x08];
+	WCHAR ui_metric_meta[0x02][0x40];
+	ULONG ui_percent[0x03];
+
+	HWND hwnd_ui_hover;
+	BOOLEAN ui_hasdata;
 } STATIC_DATA, *PSTATIC_DATA;
 
 typedef enum _CLEANUP_SOURCE_ENUM

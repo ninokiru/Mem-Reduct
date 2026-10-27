@@ -32,3 +32,17 @@ v0.0.1 (22 October 2026)
 - added 32-bit (x86) binaries and dropped arm64: windows 10/11 32-bit and 64-bit only, the installer picks the payload that matches the running windows
 - all dialogs now request Segoe UI 9 instead of the logical font "Ms Shell Dlg", which windows resolves to microsoft sans serif
 - the manifest declares tested support up to windows 11 build 26300 (25h2)
+- the automatic update check now repeats on its period while the app sits in the tray, before it only ever ran at startup
+- the tray context menu no longer leaks its menu handle when the popup has no submenu
+- the installer now requires windows 10 instead of accepting windows 7 and 8
+- the build workflow checks the pe headers of both binaries (machine, gui subsystem, version resource) instead of running the exe on the runner
+- readme explains building from source and why git clone --recursive fails: the submodules live above the repository
+- pushing a tag now also writes VERSION with the installer url and its sha256, so the update channel fills itself in
+- that automatic commit refuses to point the channel at an older version than it already serves
+- clicking clean, a tray region entry or the hotkey without administrator rights now cleans right after the elevation instead of waiting for a second click
+- the main window is rebuilt around a fixed 400 px card layout: memory percentage, used and free, pagefile and system working set bars, and a split clean button (the list view and the menu bar are gone)
+- the clean button is split: the label cleans, the caret opens the menu of the individual regions
+- the window is laid out from the monitor dpi and follows a dpi change without a restart
+- light and dark palettes follow the system theme, and the guest/administrator chip and footer note are localized
+- the overflow button and a right click open the menu, and the language submenu is rebuilt every time it opens
+- the figures in the memory card are refreshed every second, so the used and free amounts stay correct even when the percentage does not change

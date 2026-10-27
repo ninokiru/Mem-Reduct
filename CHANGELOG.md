@@ -58,6 +58,17 @@ v0.0.1 (22 October 2026)
 
 \- releases now carry two files only: setup .exe and portable .zip
 
+\- the main window is rebuilt as a fixed 400 px layout: one large percentage, the used and free figures, a row per cached region with a thin bar and a split clean button; the list view, its tooltip and the menu bar are gone
+
+\- the clean button is split in two: the label cleans, the caret opens the menu of the individual regions
+
+\- the window keeps its size in pixels at any dpi and follows a dpi change without a restart
+
+\- the light and dark palettes follow the system theme; the guest / administrator chip and the footer note are localized
+
+\- the "..." button and a right click open the same menu, and the language submenu is rebuilt on every open
+
+
 \- tray icon is now rendered with the system user interface font, ClearType and a colour that adapts to the warning and danger backgrounds
 
 \- tray icon badge scales the digits down so "100%" still fits inside the small icon
@@ -101,3 +112,19 @@ v0.0.1 (22 October 2026)
 \- all dialogs now ask for Segoe UI 9 directly instead of the logical font "Ms Shell Dlg", which Windows resolves to Microsoft Sans Serif: the main window and the five settings pages grow one step together with their texts, and the stored window position is still honoured because the window has no resize border
 
 \- the manifest declares tested support up to Windows 11 build 26300 (25H2) instead of 26200
+\- the automatic update check now repeats on its configured period while the application stays in the tray: before, a check only ever ran at startup, so a six hour period never fired again
+
+\- the tray context menu no longer leaks its menu handle when the loaded popup has no submenu
+
+\- the installer now refuses every Windows older than Windows 10 instead of only refusing Windows 7 and older, which matches the documented system requirements
+
+\- the build workflow now reads the PE headers of both binaries (machine type, GUI subsystem, version resource) instead of running the executable on the runner
+
+\- the README explains building from source, including why `git clone --recursive` cannot work: the submodule paths point above the repository
+\- publishing a tag is now the whole release: the release job hashes the installer it uploaded and commits the finished `name=version|url|sha256;` record to `VERSION` on the channel branch, so the updater works without a manual paste
+
+\- that commit refuses to rewind the channel: if `VERSION` already serves a newer version the job fails instead of overwriting it, and a blocked commit (branch protection) is reported as an error
+
+\- clicking Clean, a tray region entry or the hotkey while the application runs without administrator rights now cleans in the elevated copy: the request is stored before the restart, so the second click is gone
+
+\- the figures in the new memory card are refreshed every second instead of only when the percentage changes, so the used and free amounts cannot go stale

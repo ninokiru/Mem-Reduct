@@ -15,13 +15,16 @@ concurrency:
 env:
   APP_NAME_SHORT: memreduct
   APP_NAME: Mem Reduct
+  # this is the branch the application downloads VERSION from (UPDATE_MANIFEST_URL in src/main.h)
+  UPDATE_CHANNEL_BRANCH: main
 
 jobs:
   build:
     permissions:
       contents: read
       actions: write
-    runs-on: windows-2025
+    # v145 toolset needs visual studio 2026, which only this image carries
+    runs-on: windows-2025-vs2026
 
     steps:
       - name: Checkout application
@@ -72,7 +75,7 @@ jobs:
             Write-Host "update manifest ok"
           } elseif ($line -match '^memreduct=[0-9.]+\|[^|]+;$') {
             Write-Warning 'VERSION has no sha256 field: the in-app updater refuses such a manifest.'
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**VERSION has no sha256 field** - the updater will report an invalid manifest until the line printed by the release job is pasted into it."
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "**VERSION has no sha256 field** - the updater reports an invalid manifest until a release has been published, which writes the field."
           } else {
             Write-Error "VERSION is not a 'name=version|url[|sha256];' record: $line"
             exit 1
@@ -98,6 +101,59 @@ jobs:
         shell: cmd
         working-directory: memreduct
         run: msbuild memreduct.sln -property:Configuration=Release -property:Platform=Win32 -property:OutDir=bin\32\ -property:IntDir=obj\32\ -verbosity:minimal
+
+      - name: Check the built binaries
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $failure = @()
+          # running the executable would pop a self elevating gui on the runner, so the headers are read instead
+          $expect = @(
+            @('memreduct/bin/32/memreduct.exe', 0x14c),
+            @('memreduct/bin/64/memreduct.exe', 0x8664)
+          )
+
+          foreach ($item in $expect) {
+            $path = $item[0]
+
+            if (-not (Test-Path $path)) { $failure += "missing $path"; continue }
+
+            $bytes = [System.IO.File]::ReadAllBytes($path)
+            $header = [BitConverter]::ToInt32($bytes, 0x3C)
+
+            if ([BitConverter]::ToUInt16($bytes, 0) -ne 0x5A4D) { $failure += "$path is not an MZ executable" }
+            if ([BitConverter]::ToUInt32($bytes, $header) -ne 0x00004550) { $failure += "$path has no PE signature" }
+
+            $machine = [BitConverter]::ToUInt16($bytes, $header + 4)
+            $subsystem = [BitConverter]::ToUInt16($bytes, $header + 92)
+            $dllcharacteristics = [BitConverter]::ToUInt16($bytes, $header + 94)
+
+            if ($machine -ne $item[1]) {
+              $failure += ("{0} is machine 0x{1:x4} but 0x{2:x4} was built for it - the two platforms landed in the same folder" -f $path, $machine, $item[1])
+            }
+
+            if ($subsystem -ne 2) { $failure += "$path subsystem is $subsystem, 2 (windows gui) is expected" }
+
+            $info = (Get-Item $path).VersionInfo
+
+            if (-not $info.FileVersion.StartsWith($version)) { $failure += "$path FileVersion is '$($info.FileVersion)' but APP_VERSION is $version" }
+
+            [PSCustomObject]@{
+              Binary = $path
+              Machine = ('0x{0:x4}' -f $machine)
+              Subsystem = $subsystem
+              DllCharacteristics = ('0x{0:x4}' -f $dllcharacteristics)
+              FileVersion = $info.FileVersion
+              ProductName = $info.ProductName
+              Bytes = (Get-Item $path).Length
+            }
+          }
+
+          if ($failure) {
+            $failure | ForEach-Object { Write-Host "::error=$_" }
+
+            exit 1
+          }
 
       - name: Show binaries
         shell: pwsh
@@ -149,7 +205,7 @@ jobs:
 
           Get-ChildItem -Recurse $stage | Select-Object FullName, Length
 
-      - name: Teach the installer both architectures
+      - name: Adapt the installer script to this fork
         shell: pwsh
         working-directory: builder
         run: |
@@ -176,9 +232,28 @@ jobs:
 
           if ($text.Contains('IsNativeARM64')) { Write-Error 'an arm64 reference is left in the installer script'; exit 1 }
 
+          # builder still lets Windows 7 install, but the app needs the Windows 10 memory APIs
+          # WinVer.nsh has no service pack granularity, so the gate is Windows 10; README states the tested 21H1 floor
+          foreach ($upgrade in @(
+            @('; Windows 7 and later only', '; Windows 10 and later only'),
+            @('${IfNot} ${AtLeastWin7}', '${IfNot} ${AtLeastWin10}'),
+            @('MessageBox MB_OK|MB_ICONEXCLAMATION ''$(RequireWindows7)''', 'MessageBox MB_OK|MB_ICONEXCLAMATION ''${APP_NAME} requires Windows 10 and later!''')
+          )) {
+            if (-not $text.Contains($upgrade[0])) { Write-Error ("builder changed its os gate, cannot find: " + $upgrade[0]); exit 1 }
+
+            $text = $text.Replace($upgrade[0], $upgrade[1])
+          }
+
+          if ($text.Contains('AtLeastWin7') -or $text.Contains('RequireWindows7')) { Write-Error 'a windows 7 reference is left in the installer script'; exit 1 }
+
+          # makensis only learned AtLeastWin10 in NSIS 3.04, and choco chooses the version we get
+          $winver = Join-Path (Split-Path (Get-Command makensis.exe).Source) '..\Include\WinVer.nsh'
+
+          if (-not (Select-String -Path $winver -Pattern 'AtLeastWin10' -Quiet)) { Write-Error "this NSIS has no AtLeastWin10 macro: $winver"; exit 1 }
+
           Set-Content -Path $nsi -Value $text -NoNewline -Encoding utf8NoBOM
 
-          Select-String -Path $nsi -Pattern 'APP_FILES_DIR|RunningX64' | Select-Object LineNumber, Line
+          Select-String -Path $nsi -Pattern 'APP_FILES_DIR|RunningX64|AtLeastWin' | Select-Object LineNumber, Line
 
       - name: Build installer
         shell: pwsh
@@ -250,7 +325,7 @@ jobs:
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $line
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value '```'
-          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "Paste this line into VERSION on branch main after pushing the v.$version tag."
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "The release job commits this line to VERSION on branch main once the tag is published."
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
@@ -265,7 +340,7 @@ jobs:
     permissions:
       contents: write
       actions: read
-    runs-on: windows-2025
+    runs-on: windows-2025-vs2026
 
     steps:
       - name: Checkout application
@@ -302,3 +377,72 @@ jobs:
           # a re-run for the same tag must not fail, so top up the assets of the release that already exists
           gh release create "$env:GITHUB_REF_NAME" --verify-tag --title "Mem Reduct ${{ steps.version.outputs.version }}" --generate-notes --latest $assets
           if ($LASTEXITCODE -ne 0) { gh release upload "$env:GITHUB_REF_NAME" $assets --clobber }
+
+      - name: Point VERSION at this release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = '${{ steps.version.outputs.version }}'
+          $setup = "memreduct-$version-setup.exe"
+
+          # the record promises a download url, so the asset has to be really there with exactly that address
+          $release = (gh release view "$env:GITHUB_REF_NAME" --json assets | ConvertFrom-Json)
+
+          if ($LASTEXITCODE -ne 0) { Write-Error 'could not read back the release'; exit 1 }
+
+          $installer = $release.assets | Where-Object name -eq $setup
+
+          if (-not $installer) { Write-Error "the release does not carry $setup"; exit 1 }
+
+          $sha = (Get-FileHash -Path "dist/$setup" -Algorithm SHA256).Hash.ToLower()
+          $line = "memreduct=$version|$($installer.url)|$sha;"
+
+          if ($installer.url -ne "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:GITHUB_REF_NAME/$setup") {
+            Write-Error "unexpected asset url: $($installer.url)"
+            exit 1
+          }
+
+          # the file is replaced through the api, because this run is checked out at the tag, not at the channel branch
+          $manifest = gh api "repos/$env:GITHUB_REPOSITORY/contents/VERSION?ref=$env:UPDATE_CHANNEL_BRANCH" | ConvertFrom-Json
+
+          if ($LASTEXITCODE -ne 0) { Write-Error "could not read VERSION on $env:UPDATE_CHANNEL_BRANCH"; exit 1 }
+
+          $current = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($manifest.content)).Trim()
+
+          if ($current) {
+            $published = ($current -split '\|')[0] -replace '^[^=]+=', ''
+
+            try {
+              if ([version]$published -gt [version]$version) {
+                Write-Error "VERSION on $env:UPDATE_CHANNEL_BRANCH already points at $published - refusing to rewind the channel to $version"
+                exit 1
+              }
+            }
+            catch {
+              Write-Host "VERSION on $env:UPDATE_CHANNEL_BRANCH is not a plain record, replacing it: $current"
+            }
+          }
+
+          $content = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($line))
+
+          # one argument per element, so neither the message nor the base64 body can be split by the shell
+          $call = @(
+            'api',
+            ("repos/{0}/contents/VERSION" -f $env:GITHUB_REPOSITORY),
+            '-X', 'PUT',
+            '-f', ('ref=' + $env:UPDATE_CHANNEL_BRANCH),
+            '-f', ('message=VERSION: point the update channel at ' + $env:GITHUB_REF_NAME + ' [skip ci]'),
+            '-f', ('content=' + $content),
+            '-f', ('sha=' + $manifest.sha)
+          )
+
+          gh @call
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "the release is published but VERSION could not be committed on $env:UPDATE_CHANNEL_BRANCH - check branch protection"
+            exit 1
+          }
+
+          Write-Host $line
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value ('VERSION on branch ' + $env:UPDATE_CHANNEL_BRANCH + ' now serves **v' + $version + '** (sha256 ' + $sha + ').')

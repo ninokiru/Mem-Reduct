@@ -16,6 +16,13 @@ ULONG intervals_arr[13] = {0};
 // exit code reported to the console caller, only meaningful for command line mode
 INT cmdline_exit_code = ERROR_APP_INIT_FAILURE;
 
+// this file is ordered by definition, and the tray timer outlives the window code that first calls the updater
+_Success_ (return)
+BOOLEAN _app_update_check (
+	_In_ HWND hwnd,
+	_In_ BOOLEAN is_silent
+);
+
 INT WINAPIV compare_numbers (
 	_In_opt_ PVOID context,
 	_In_ LPCVOID ptr1,
@@ -399,6 +406,17 @@ NTSTATUS _app_flushvolumecache ()
 	return is_flushed ? STATUS_SUCCESS : last_status;
 }
 
+VOID _app_cleanpending_set (
+	_In_ ULONG mask
+)
+{
+	// the elevated copy restarts with the same command line, and a click has no argument to carry the request across
+	if (!mask)
+		mask = _r_config_getulong_ex (L"ReductMask2", REDUCT_MASK_DEFAULT, NULL);
+
+	_r_config_setulong_ex (L"CleanPendingMask", mask & REDUCT_MASK_ALL, NULL);
+}
+
 VOID _app_memoryclean (
 	_In_opt_ HWND hwnd,
 	_In_ CLEANUP_SOURCE_ENUM src,
@@ -421,6 +439,10 @@ VOID _app_memoryclean (
 
 	if (!_r_sys_iselevated ())
 	{
+		// the command line clean carries its own argument, every other source has to wait for the elevated copy
+		if (src != SOURCE_CMDLINE)
+			_app_cleanpending_set (mask);
+
 		if (_r_app_runasadmin ())
 		{
 			// the elevated copy inherited the command line and does the cleaning, so report the handoff as done
@@ -432,6 +454,9 @@ VOID _app_memoryclean (
 		}
 		else
 		{
+			if (src != SOURCE_CMDLINE)
+				_r_config_setulong_ex (L"CleanPendingMask", 0, NULL);
+
 			if (src == SOURCE_CMDLINE)
 			{
 				_r_show_message (hwnd, MB_OK | MB_ICONSTOP, _r_app_getname (), _r_locale_getstring (IDS_STATUS_NOPRIVILEGES));
@@ -762,6 +787,1168 @@ VOID _app_drawbackground (
 	SetBkColor (hdc, prev_clr);
 }
 
+FORCEINLINE LONG _app_ui_scale (
+	_In_ LONG value,
+	_In_ LONG dpi_value
+)
+{
+	return _r_calc_multipledivide (value, dpi_value, USER_DEFAULT_SCREEN_DPI);
+}
+
+typedef struct _APP_UI_PALETTE
+{
+	COLORREF window;
+	COLORREF card;
+	COLORREF text;
+	COLORREF textmuted;
+	COLORREF track;
+	COLORREF accent;
+	COLORREF accenthover;
+	COLORREF accentpressed;
+	COLORREF accenttext;
+	COLORREF chipbg;
+	COLORREF chiptext;
+} APP_UI_PALETTE, *PAPP_UI_PALETTE;
+
+VOID _app_ui_getpalette (
+	_Out_ PAPP_UI_PALETTE palette,
+	_In_ BOOLEAN is_dark,
+	_In_ BOOLEAN is_elevated
+)
+{
+	if (is_dark)
+	{
+		palette->window = RGB (0x20, 0x20, 0x20);
+		palette->card = RGB (0x2B, 0x2B, 0x2B);
+		palette->text = RGB (0xFF, 0xFF, 0xFF);
+		palette->textmuted = RGB (0xBE, 0xBE, 0xBE);
+		palette->track = RGB (0x3D, 0x3D, 0x3D);
+		palette->accent = RGB (0x60, 0xCD, 0xFF);
+		palette->accenthover = RGB (0x7A, 0xD4, 0xFF);
+		palette->accentpressed = RGB (0x4F, 0xC3, 0xF7);
+		palette->accenttext = RGB (0x00, 0x1E, 0x2B);
+		palette->chipbg = is_elevated ? RGB (0x28, 0x38, 0x3F) : RGB (0x3E, 0x37, 0x2A);
+		palette->chiptext = is_elevated ? RGB (0x60, 0xCD, 0xFF) : RGB (0xF5, 0xC2, 0x6B);
+	}
+	else
+	{
+		palette->window = RGB (0xF3, 0xF3, 0xF3);
+		palette->card = RGB (0xFF, 0xFF, 0xFF);
+		palette->text = RGB (0x1B, 0x1B, 0x1B);
+		palette->textmuted = RGB (0x5C, 0x5C, 0x5C);
+		palette->track = RGB (0xE4, 0xE4, 0xE4);
+		palette->accent = RGB (0x0F, 0x6C, 0xBD);
+		palette->accenthover = RGB (0x11, 0x5E, 0xA3);
+		palette->accentpressed = RGB (0x0C, 0x4F, 0x8A);
+		palette->accenttext = RGB (0xFF, 0xFF, 0xFF);
+		palette->chipbg = is_elevated ? RGB (0xE8, 0xF2, 0xFB) : RGB (0xFF, 0xF3, 0xDE);
+		palette->chiptext = is_elevated ? RGB (0x0F, 0x6C, 0xBD) : RGB (0x8A, 0x4B, 0x00);
+	}
+}
+
+VOID _app_ui_fillroundrect (
+	_In_ HDC hdc,
+	_In_ LPCRECT rect,
+	_In_ LONG radius,
+	_In_ COLORREF clr
+)
+{
+	HGDIOBJ prev_brush, prev_pen;
+
+	prev_brush = SelectObject (hdc, GetStockObject (DC_BRUSH));
+	prev_pen = SelectObject (hdc, GetStockObject (DC_PEN));
+
+	SetDCBrushColor (hdc, clr);
+	SetDCPenColor (hdc, clr);
+
+	if (radius < 1)
+		radius = 1;
+
+	RoundRect (hdc, rect->left, rect->top, rect->right, rect->bottom, radius * 2, radius * 2);
+
+	SelectObject (hdc, prev_brush);
+	SelectObject (hdc, prev_pen);
+}
+
+VOID _app_ui_drawfocus (
+	_In_ HDC hdc,
+	_In_ LPCRECT rect,
+	_In_ LONG radius,
+	_In_ COLORREF clr
+)
+{
+	HGDIOBJ prev_brush, prev_pen;
+
+	prev_brush = SelectObject (hdc, GetStockObject (NULL_BRUSH));
+	prev_pen = SelectObject (hdc, GetStockObject (DC_PEN));
+
+	SetDCPenColor (hdc, clr);
+
+	if (radius < 1)
+		radius = 1;
+
+	RoundRect (hdc, rect->left, rect->top, rect->right, rect->bottom, radius * 2, radius * 2);
+
+	SelectObject (hdc, prev_brush);
+	SelectObject (hdc, prev_pen);
+}
+
+VOID _app_ui_drawtext (
+	_In_ HDC hdc,
+	_In_ LPCWSTR text,
+	_In_ LPCRECT rect,
+	_In_ HFONT hfont,
+	_In_ COLORREF clr,
+	_In_ UINT flags
+)
+{
+	HGDIOBJ hfont_prev;
+
+	hfont_prev = SelectObject (hdc, hfont);
+
+	SetTextColor (hdc, clr);
+	SetBkMode (hdc, TRANSPARENT);
+
+	DrawTextW (hdc, text, -1, (LPRECT)rect, flags | DT_NOPREFIX);
+
+	SelectObject (hdc, hfont_prev);
+}
+
+LONG _app_ui_gettextwidth (
+	_In_ HDC hdc,
+	_In_ HFONT hfont,
+	_In_ LPCWSTR text
+)
+{
+	SIZE size = {0};
+	HGDIOBJ hfont_prev;
+
+	hfont_prev = SelectObject (hdc, hfont);
+
+	GetTextExtentPoint32W (hdc, text, (INT)_r_str_getlength (text), &size);
+
+	SelectObject (hdc, hfont_prev);
+
+	return size.cx;
+}
+
+VOID _app_ui_drawbar (
+	_In_ HDC hdc,
+	_In_ LPCRECT rect,
+	_In_ COLORREF clr_track,
+	_In_ COLORREF clr_fill,
+	_In_ ULONG percent
+)
+{
+	RECT fill;
+	LONG radius;
+	LONG minimum;
+
+	if (percent > 100)
+		percent = 100;
+
+	radius = (rect->bottom - rect->top) / 2;
+
+	_app_ui_fillroundrect (hdc, rect, radius, clr_track);
+
+	if (percent == 0)
+		return;
+
+	fill = *rect;
+
+	fill.right = fill.left + (LONG)(((ULONG)(rect->right - rect->left) * percent) / 100);
+
+	// a short bar must still show its rounded cap
+	minimum = rect->left + (radius * 2);
+
+	if (fill.right < minimum)
+		fill.right = minimum;
+
+	if (fill.right > rect->right)
+		fill.right = rect->right;
+
+	_app_ui_fillroundrect (hdc, &fill, radius, clr_fill);
+}
+
+COLORREF _app_ui_getlevelcolor (
+	_In_ PAPP_UI_PALETTE palette,
+	_In_ ULONG percent
+)
+{
+	if (percent >= _app_getdangervalue ())
+		return _r_config_getulong_ex (L"TrayColorDanger", TRAY_COLOR_DANGER, NULL);
+
+	if (percent >= _app_getwarningvalue ())
+		return _r_config_getulong_ex (L"TrayColorWarning", TRAY_COLOR_WARNING, NULL);
+
+	return palette->accent;
+}
+
+VOID _app_ui_drawshield (
+	_In_ HDC hdc,
+	_In_ LONG x,
+	_In_ LONG y,
+	_In_ LONG height,
+	_In_ COLORREF clr
+)
+{
+	POINT points[6];
+	HGDIOBJ prev_brush, prev_pen;
+	LONG width;
+
+	width = (height * 5) / 6;
+
+	points[0].x = x + (width / 2);
+	points[0].y = y;
+
+	points[1].x = x + width;
+	points[1].y = y + ((height * 2) / 10);
+
+	points[2].x = x + width;
+	points[2].y = y + ((height * 6) / 10);
+
+	points[3].x = x + (width / 2);
+	points[3].y = y + height;
+
+	points[4].x = x;
+	points[4].y = y + ((height * 6) / 10);
+
+	points[5].x = x;
+	points[5].y = y + ((height * 2) / 10);
+
+	prev_brush = SelectObject (hdc, GetStockObject (DC_BRUSH));
+	prev_pen = SelectObject (hdc, GetStockObject (DC_PEN));
+
+	SetDCBrushColor (hdc, clr);
+	SetDCPenColor (hdc, clr);
+
+	Polygon (hdc, points, RTL_NUMBER_OF (points));
+
+	SelectObject (hdc, prev_brush);
+	SelectObject (hdc, prev_pen);
+}
+
+VOID _app_ui_drawchevron (
+	_In_ HDC hdc,
+	_In_ LONG center_x,
+	_In_ LONG center_y,
+	_In_ LONG size,
+	_In_ LONG stroke,
+	_In_ COLORREF clr
+)
+{
+	POINT points[3];
+	HPEN hpen, hpen_prev;
+
+	points[0].x = center_x - size;
+	points[0].y = center_y - (size / 2);
+
+	points[1].x = center_x;
+	points[1].y = center_y + (size / 2);
+
+	points[2].x = center_x + size;
+	points[2].y = center_y - (size / 2);
+
+	hpen = CreatePen (PS_SOLID, stroke, clr);
+
+	if (!hpen)
+		return;
+
+	hpen_prev = SelectObject (hdc, hpen);
+
+	Polyline (hdc, points, RTL_NUMBER_OF (points));
+
+	SelectObject (hdc, hpen_prev);
+
+	DeleteObject (hpen);
+}
+
+VOID _app_ui_drawdots (
+	_In_ HDC hdc,
+	_In_ LONG center_x,
+	_In_ LONG center_y,
+	_In_ LONG radius,
+	_In_ LONG gap,
+	_In_ COLORREF clr
+)
+{
+	HGDIOBJ prev_brush, prev_pen;
+	LONG x;
+
+	prev_brush = SelectObject (hdc, GetStockObject (DC_BRUSH));
+	prev_pen = SelectObject (hdc, GetStockObject (NULL_PEN));
+
+	SetDCBrushColor (hdc, clr);
+
+	for (INT i = -1; i <= 1; i++)
+	{
+		x = center_x + (i * gap);
+
+		Ellipse (hdc, x - radius, center_y - radius, x + radius, center_y + radius);
+	}
+
+	SelectObject (hdc, prev_brush);
+	SelectObject (hdc, prev_pen);
+}
+
+HFONT _app_ui_fontcreate (
+	_In_ LONG size,
+	_In_ LONG weight,
+	_In_ LONG dpi_value
+)
+{
+	LOGFONT logfont = {0};
+
+	_r_str_copy (logfont.lfFaceName, LF_FACESIZE, L"Segoe UI");
+
+	logfont.lfHeight = _r_dc_fontsizetoheight (size, dpi_value);
+	logfont.lfWeight = weight;
+	logfont.lfCharSet = DEFAULT_CHARSET;
+	logfont.lfQuality = CLEARTYPE_QUALITY;
+
+	return CreateFontIndirectW (&logfont);
+}
+
+VOID _app_ui_fontsfree ()
+{
+	SAFE_DELETE_OBJECT (config.hfont_ui_hero);
+	SAFE_DELETE_OBJECT (config.hfont_ui_title);
+	SAFE_DELETE_OBJECT (config.hfont_ui_body);
+	SAFE_DELETE_OBJECT (config.hfont_ui_bodybold);
+	SAFE_DELETE_OBJECT (config.hfont_ui_small);
+	SAFE_DELETE_OBJECT (config.hfont_ui_smallbold);
+}
+
+VOID _app_ui_fontscreate (
+	_In_ LONG dpi_value
+)
+{
+	_app_ui_fontsfree ();
+
+	config.hfont_ui_hero = _app_ui_fontcreate (30, FW_SEMIBOLD, dpi_value);
+	config.hfont_ui_title = _app_ui_fontcreate (13, FW_SEMIBOLD, dpi_value);
+	config.hfont_ui_body = _app_ui_fontcreate (10, FW_NORMAL, dpi_value);
+	config.hfont_ui_bodybold = _app_ui_fontcreate (10, FW_SEMIBOLD, dpi_value);
+	config.hfont_ui_small = _app_ui_fontcreate (9, FW_NORMAL, dpi_value);
+	config.hfont_ui_smallbold = _app_ui_fontcreate (9, FW_SEMIBOLD, dpi_value);
+}
+
+VOID _app_ui_localize (
+	_In_ HWND hwnd
+)
+{
+	// the labels are drawn by the owner draw code, the window text only feeds screen readers
+	_r_ctrl_setstring (hwnd, IDC_CLEAN, _r_locale_getstring (IDS_CLEAN));
+	_r_ctrl_setstring (hwnd, IDC_CLEANMENU, _r_locale_getstring (IDS_CLEAN));
+	_r_ctrl_setstring (hwnd, IDC_MAINMENU, _r_locale_getstring (IDS_UI_MENU));
+	_r_ctrl_setstring (hwnd, IDC_SETTINGS, _r_locale_getstring (IDS_SETTINGS));
+}
+
+BOOLEAN _app_ui_updatemetrics (
+	_In_opt_ PR_MEMORY_INFO info
+)
+{
+	R_MEMORY_INFO mem_info_local;
+	PR_MEMORY_INFO mem_info = info;
+	PR_MEMORY_OBJECT object;
+	WCHAR hero_percent[0x08];
+	WCHAR hero_used[0x20];
+	WCHAR hero_free[0x20];
+	WCHAR metric_percent[0x02][0x08];
+	WCHAR metric_meta[0x02][0x40];
+	WCHAR buffer[0x40];
+	WCHAR buffer_line[0x40];
+	ULONG percent[3];
+
+	if (!mem_info)
+	{
+		_app_getmemoryinfo (&mem_info_local);
+
+		mem_info = &mem_info_local;
+	}
+
+	percent[0] = mem_info->physical_memory.percent;
+	percent[1] = mem_info->page_file.percent;
+	percent[2] = mem_info->system_cache.percent;
+
+	_r_str_printf (hero_percent, RTL_NUMBER_OF (hero_percent), L"%" TEXT (PR_ULONG) L"%%", percent[0]);
+
+	_r_format_bytesize64 (buffer, RTL_NUMBER_OF (buffer), mem_info->physical_memory.used_bytes);
+	_r_str_printf (hero_used, RTL_NUMBER_OF (hero_used), L"%s %s", buffer, _r_locale_getstring (IDS_UI_INUSE));
+
+	_r_format_bytesize64 (buffer, RTL_NUMBER_OF (buffer), mem_info->physical_memory.free_bytes);
+	_r_str_printf (hero_free, RTL_NUMBER_OF (hero_free), L"%s %s", buffer, _r_locale_getstring (IDS_UI_FREE));
+
+	for (INT i = 0; i < 2; i++)
+	{
+		object = (i == 0) ? &mem_info->page_file : &mem_info->system_cache;
+
+		_r_str_printf (metric_percent[i], RTL_NUMBER_OF (metric_percent[i]), L"%" TEXT (PR_ULONG) L"%%", percent[i + 1]);
+
+		_r_format_bytesize64 (buffer, RTL_NUMBER_OF (buffer), object->used_bytes);
+		_r_format_bytesize64 (buffer_line, RTL_NUMBER_OF (buffer_line), object->total_bytes);
+
+		_r_str_printf (metric_meta[i], RTL_NUMBER_OF (metric_meta[i]), L"%s / %s", buffer, buffer_line);
+	}
+
+	// the timer runs every second: the strings are still formatted every time, but a repaint is only requested
+	// when one of them changed - an idle machine would otherwise flicker for a value that is not even different
+	if (config.ui_hasdata &&
+		_r_str_compare (hero_percent, config.ui_hero_percent, FALSE) == 0 &&
+		_r_str_compare (hero_used, config.ui_hero_used, FALSE) == 0 &&
+		_r_str_compare (hero_free, config.ui_hero_free, FALSE) == 0 &&
+		_r_str_compare (metric_percent[0], config.ui_metric_percent[0], FALSE) == 0 &&
+		_r_str_compare (metric_percent[1], config.ui_metric_percent[1], FALSE) == 0 &&
+		_r_str_compare (metric_meta[0], config.ui_metric_meta[0], FALSE) == 0 &&
+		_r_str_compare (metric_meta[1], config.ui_metric_meta[1], FALSE) == 0)
+	{
+		return FALSE;
+	}
+
+	config.ui_hasdata = TRUE;
+
+	config.ui_percent[0] = percent[0];
+	config.ui_percent[1] = percent[1];
+	config.ui_percent[2] = percent[2];
+
+	_r_str_copy (config.ui_hero_percent, RTL_NUMBER_OF (config.ui_hero_percent), hero_percent);
+	_r_str_copy (config.ui_hero_used, RTL_NUMBER_OF (config.ui_hero_used), hero_used);
+	_r_str_copy (config.ui_hero_free, RTL_NUMBER_OF (config.ui_hero_free), hero_free);
+
+	_r_str_copy (config.ui_metric_percent[0], RTL_NUMBER_OF (config.ui_metric_percent[0]), metric_percent[0]);
+	_r_str_copy (config.ui_metric_percent[1], RTL_NUMBER_OF (config.ui_metric_percent[1]), metric_percent[1]);
+	_r_str_copy (config.ui_metric_meta[0], RTL_NUMBER_OF (config.ui_metric_meta[0]), metric_meta[0]);
+	_r_str_copy (config.ui_metric_meta[1], RTL_NUMBER_OF (config.ui_metric_meta[1]), metric_meta[1]);
+
+	return TRUE;
+}
+
+VOID _app_ui_invalidate (
+	_In_ HWND hwnd
+)
+{
+	INT controls[] = {
+		IDC_CLEAN,
+		IDC_CLEANMENU,
+		IDC_MAINMENU,
+		IDC_SETTINGS,
+	};
+
+	HWND hctrl;
+
+	InvalidateRect (hwnd, NULL, FALSE);
+
+	for (ULONG_PTR i = 0; i < RTL_NUMBER_OF (controls); i++)
+	{
+		hctrl = GetDlgItem (hwnd, controls[i]);
+
+		if (hctrl)
+			InvalidateRect (hctrl, NULL, FALSE);
+	}
+}
+
+VOID _app_ui_setsize (
+	_In_ HWND hwnd,
+	_In_ LONG dpi_value
+)
+{
+	RECT rect = {0};
+
+	rect.right = _app_ui_scale (UI_WIDTH, dpi_value);
+	rect.bottom = _app_ui_scale (UI_HEIGHT, dpi_value);
+
+	// the dialog template is sized in dialog units, the client area must be pinned in pixels
+	_r_dc_adjustwindowrect (
+		&rect,
+		WS_POPUPWINDOW | WS_MINIMIZEBOX | WS_CAPTION | WS_CLIPCHILDREN | DS_MODALFRAME,
+		WS_EX_DLGMODALFRAME,
+		dpi_value,
+		FALSE
+	);
+
+	SetWindowPos (hwnd, NULL, 0, 0, rect.right - rect.left, rect.bottom - rect.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+VOID _app_ui_layoutcontrols (
+	_In_ HWND hwnd,
+	_In_ LONG dpi_value
+)
+{
+	HRGN hrgn;
+	HWND hctrl;
+	LONG pad;
+	LONG width;
+	LONG actions_top;
+	LONG actions_height;
+	LONG split_width;
+	LONG radius;
+	LONG x, y, w, h;
+
+	pad = _app_ui_scale (UI_PAD, dpi_value);
+	width = _app_ui_scale (UI_WIDTH, dpi_value);
+	actions_top = _app_ui_scale (UI_ACTIONS_TOP, dpi_value);
+	actions_height = _app_ui_scale (UI_ACTIONS_HEIGHT, dpi_value);
+	split_width = _app_ui_scale (UI_SPLIT_WIDTH, dpi_value);
+	radius = _app_ui_scale (UI_CONTROL_RADIUS, dpi_value);
+
+	// the two halves share one rounded outline: the main half runs under the caret, so only its outer corners show
+	hctrl = GetDlgItem (hwnd, IDC_CLEAN);
+
+	if (hctrl)
+	{
+		w = width - (pad * 2) - split_width;
+
+		MoveWindow (hctrl, pad, actions_top, w + radius, actions_height, TRUE);
+
+		hrgn = CreateRoundRectRgn (0, 0, w + radius + 1, actions_height + 1, radius * 2, radius * 2);
+
+		if (hrgn)
+			SetWindowRgn (hctrl, hrgn, TRUE);
+	}
+
+	hctrl = GetDlgItem (hwnd, IDC_CLEANMENU);
+
+	if (hctrl)
+	{
+		x = width - pad - split_width;
+
+		MoveWindow (hctrl, x, actions_top, split_width, actions_height, TRUE);
+
+		hrgn = CreateRoundRectRgn (-radius, 0, split_width + 1, actions_height + 1, radius * 2, radius * 2);
+
+		if (hrgn)
+			SetWindowRgn (hctrl, hrgn, TRUE);
+	}
+
+	hctrl = GetDlgItem (hwnd, IDC_MAINMENU);
+
+	if (hctrl)
+	{
+		w = _app_ui_scale (UI_OVERFLOW_SIZE, dpi_value);
+		h = w;
+
+		y = _app_ui_scale (UI_HEADER_TOP, dpi_value) + ((_app_ui_scale (UI_HEADER_HEIGHT, dpi_value) - h) / 2);
+
+		MoveWindow (hctrl, width - pad - w, y, w, h, TRUE);
+	}
+
+	hctrl = GetDlgItem (hwnd, IDC_SETTINGS);
+
+	if (hctrl)
+	{
+		w = _app_ui_scale (80, dpi_value);
+		h = _app_ui_scale (UI_FOOTER_HEIGHT, dpi_value);
+
+		MoveWindow (hctrl, width - pad - w, _app_ui_scale (UI_FOOTER_TOP, dpi_value), w, h, TRUE);
+	}
+}
+
+VOID _app_ui_paintheader (
+	_In_ HDC hdc,
+	_In_ LONG dpi_value,
+	_In_ PAPP_UI_PALETTE palette
+)
+{
+	RECT rect;
+	RECT chip;
+	LONG pad;
+	LONG header_top;
+	LONG header_height;
+	LONG chip_height;
+	LONG chip_padding;
+	LONG text_width;
+	LPCWSTR text;
+
+	pad = _app_ui_scale (UI_PAD, dpi_value);
+	header_top = _app_ui_scale (UI_HEADER_TOP, dpi_value);
+	header_height = _app_ui_scale (UI_HEADER_HEIGHT, dpi_value);
+	chip_height = _app_ui_scale (20, dpi_value);
+	chip_padding = _app_ui_scale (10, dpi_value);
+
+	rect.left = pad;
+	rect.top = header_top;
+	rect.right = _app_ui_scale (UI_WIDTH, dpi_value) - pad - _app_ui_scale (UI_OVERFLOW_SIZE + 8, dpi_value);
+	rect.bottom = header_top + header_height;
+
+	text = _r_locale_getstring (IDS_GROUP_1);
+
+	_app_ui_drawtext (hdc, text, &rect, config.hfont_ui_title, palette->text, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+	text_width = _app_ui_gettextwidth (hdc, config.hfont_ui_title, text);
+
+	text = _r_locale_getstring (_r_sys_iselevated () ? IDS_UI_ADMIN : IDS_UI_GUEST);
+
+	chip.left = rect.left + text_width + _app_ui_scale (8, dpi_value);
+	chip.top = header_top + ((header_height - chip_height) / 2);
+	chip.right = chip.left + _app_ui_gettextwidth (hdc, config.hfont_ui_smallbold, text) + (chip_padding * 2);
+	chip.bottom = chip.top + chip_height;
+
+	if (chip.right > rect.right)
+		chip.right = rect.right;
+
+	_app_ui_fillroundrect (hdc, &chip, chip_height / 2, palette->chipbg);
+
+	_app_ui_drawtext (hdc, text, &chip, config.hfont_ui_smallbold, palette->chiptext, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
+VOID _app_ui_paintcard (
+	_In_ HDC hdc,
+	_In_ LONG dpi_value,
+	_In_ PAPP_UI_PALETTE palette
+)
+{
+	RECT card;
+	RECT rect;
+	RECT bar;
+	RECT separator;
+	LONG pad;
+	LONG inner;
+	LONG width;
+	LONG radius;
+	LONG bar_height;
+	LONG row_height;
+	LONG row_top;
+	LONG thickness;
+
+	pad = _app_ui_scale (UI_PAD, dpi_value);
+	width = _app_ui_scale (UI_WIDTH, dpi_value);
+	inner = _app_ui_scale (16, dpi_value);
+	radius = _app_ui_scale (UI_CARD_RADIUS, dpi_value);
+	bar_height = _app_ui_scale (UI_BAR_HEIGHT, dpi_value);
+	row_height = _app_ui_scale (UI_ROW_HEIGHT, dpi_value);
+
+	card.left = pad;
+	card.top = _app_ui_scale (UI_CARD_TOP, dpi_value);
+	card.right = width - pad;
+	card.bottom = _app_ui_scale (UI_CARD_BOTTOM, dpi_value);
+
+	_app_ui_fillroundrect (hdc, &card, radius, palette->card);
+
+	// hero
+	rect.left = card.left + inner;
+	rect.top = card.top + _app_ui_scale (10, dpi_value);
+	rect.right = card.right - inner;
+	rect.bottom = rect.top + _app_ui_scale (46, dpi_value);
+
+	_app_ui_drawtext (hdc, config.ui_hero_percent, &rect, config.hfont_ui_hero, palette->text, DT_LEFT | DT_TOP | DT_SINGLELINE);
+
+	// used and free share the line under the hero
+	rect.top = rect.bottom;
+	rect.bottom = rect.top + _app_ui_scale (18, dpi_value);
+
+	_app_ui_drawtext (hdc, config.ui_hero_used, &rect, config.hfont_ui_body, palette->textmuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+	_app_ui_drawtext (hdc, config.ui_hero_free, &rect, config.hfont_ui_body, palette->textmuted, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+
+	// separator
+	separator.left = card.left + inner;
+	separator.right = card.right - inner;
+	separator.top = rect.bottom + _app_ui_scale (10, dpi_value);
+
+	thickness = _app_ui_scale (1, dpi_value);
+
+	separator.bottom = separator.top + (thickness < 1 ? 1 : thickness);
+
+	_r_dc_fillrect (hdc, &separator, palette->track);
+
+	for (INT i = 0; i < 2; i++)
+	{
+		row_top = separator.bottom + _app_ui_scale (8, dpi_value) + (i * row_height);
+
+		rect.left = card.left + inner;
+		rect.top = row_top;
+		rect.right = card.right - inner;
+		rect.bottom = row_top + _app_ui_scale (16, dpi_value);
+
+		_app_ui_drawtext (hdc, _r_locale_getstring (IDS_GROUP_2 + i), &rect, config.hfont_ui_body, palette->text, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+		_app_ui_drawtext (hdc, config.ui_metric_percent[i], &rect, config.hfont_ui_bodybold, palette->text, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+
+		bar.left = rect.left;
+		bar.right = rect.right;
+		bar.top = rect.bottom + _app_ui_scale (6, dpi_value);
+		bar.bottom = bar.top + bar_height;
+
+		_app_ui_drawbar (hdc, &bar, palette->track, _app_ui_getlevelcolor (palette, config.ui_percent[i + 1]), config.ui_percent[i + 1]);
+
+		rect.top = bar.bottom + _app_ui_scale (4, dpi_value);
+		rect.bottom = rect.top + _app_ui_scale (14, dpi_value);
+
+		_app_ui_drawtext (hdc, config.ui_metric_meta[i], &rect, config.hfont_ui_small, palette->textmuted, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+	}
+}
+
+VOID _app_ui_paintfooter (
+	_In_ HDC hdc,
+	_In_ LONG dpi_value,
+	_In_ PAPP_UI_PALETTE palette
+)
+{
+	RECT rect;
+	LONG pad;
+
+	pad = _app_ui_scale (UI_PAD, dpi_value);
+
+	rect.left = pad;
+	rect.top = _app_ui_scale (UI_FOOTER_TOP, dpi_value);
+	rect.right = _app_ui_scale (UI_WIDTH, dpi_value) - pad - _app_ui_scale (88, dpi_value);
+	rect.bottom = rect.top + _app_ui_scale (UI_FOOTER_HEIGHT, dpi_value);
+
+	_app_ui_drawtext (
+		hdc,
+		_r_locale_getstring (_r_sys_iselevated () ? IDS_UI_ADMINNOTE : IDS_UI_GUESTNOTE),
+		&rect,
+		config.hfont_ui_small,
+		palette->textmuted,
+		DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS
+	);
+}
+
+VOID _app_ui_paint (
+	_In_ HWND hwnd,
+	_In_ HDC hdc_window
+)
+{
+	APP_UI_PALETTE palette;
+	RECT client;
+	HDC hdc;
+	HBITMAP hbitmap;
+	HGDIOBJ hbitmap_prev;
+	LONG dpi_value;
+
+	if (!GetClientRect (hwnd, &client))
+		return;
+
+	hdc = CreateCompatibleDC (hdc_window);
+
+	if (!hdc)
+		return;
+
+	hbitmap = CreateCompatibleBitmap (hdc_window, client.right, client.bottom);
+
+	if (!hbitmap)
+	{
+		DeleteDC (hdc);
+
+		return;
+	}
+
+	hbitmap_prev = SelectObject (hdc, hbitmap);
+
+	dpi_value = _r_dc_getwindowdpi (hwnd);
+
+	_app_ui_getpalette (&palette, _r_theme_isenabled (), _r_sys_iselevated ());
+
+	SetBkMode (hdc, TRANSPARENT);
+
+	_r_dc_fillrect (hdc, &client, palette.window);
+
+	_app_ui_paintheader (hdc, dpi_value, &palette);
+	_app_ui_paintcard (hdc, dpi_value, &palette);
+	_app_ui_paintfooter (hdc, dpi_value, &palette);
+
+	BitBlt (hdc_window, 0, 0, client.right, client.bottom, hdc, 0, 0, SRCCOPY);
+
+	SelectObject (hdc, hbitmap_prev);
+
+	DeleteObject (hbitmap);
+	DeleteDC (hdc);
+}
+
+VOID _app_ui_drawbutton (
+	_In_ LPDRAWITEMSTRUCT dis
+)
+{
+	APP_UI_PALETTE palette;
+	RECT rect;
+	RECT focus;
+	RECT textrect;
+	RECT divider;
+	LONG dpi_value;
+	LONG radius;
+	LONG width;
+	LONG height;
+	LONG center_x;
+	LONG center_y;
+	LONG text_width;
+	LONG shield_width;
+	LONG shield_height;
+	LONG left;
+	UINT flags;
+	BOOLEAN is_elevated;
+	BOOLEAN is_hover;
+	BOOLEAN is_pressed;
+	LPCWSTR text;
+
+	dpi_value = _r_dc_getwindowdpi (dis->hwndItem);
+
+	is_elevated = _r_sys_iselevated ();
+	is_hover = (config.hwnd_ui_hover == dis->hwndItem);
+	is_pressed = !!(dis->itemState & ODS_SELECTED);
+
+	_app_ui_getpalette (&palette, _r_theme_isenabled (), is_elevated);
+
+	rect = dis->rcItem;
+
+	width = rect.right - rect.left;
+	height = rect.bottom - rect.top;
+
+	radius = _app_ui_scale (UI_CONTROL_RADIUS, dpi_value);
+
+	center_x = (rect.left + rect.right) / 2;
+	center_y = (rect.top + rect.bottom) / 2;
+
+	// the child window erases nothing, every pixel of the region is painted here
+	_r_dc_fillrect (dis->hDC, &rect, palette.window);
+
+	switch (dis->CtlID)
+	{
+		case IDC_CLEAN:
+		case IDC_CLEANMENU:
+		{
+			COLORREF clr;
+			RECT shape;
+
+			clr = is_pressed ? palette.accentpressed : (is_hover ? palette.accenthover : palette.accent);
+
+			shape = rect;
+
+			// the caret covers the rounded right end of the pair, so its own left side has to stay square
+			if (dis->CtlID == IDC_CLEANMENU)
+				shape.left -= radius;
+
+			_app_ui_fillroundrect (dis->hDC, &shape, radius, clr);
+
+			if (dis->CtlID == IDC_CLEAN)
+			{
+				// the last radius pixels run under the caret, so the divider and the label stay left of them
+				divider.left = rect.right - radius - _app_ui_scale (1, dpi_value);
+				divider.right = rect.right - radius;
+				divider.top = rect.top + (height / 4);
+				divider.bottom = rect.bottom - (height / 4);
+
+				_r_dc_fillrect (dis->hDC, &divider, palette.accentpressed);
+
+				text = _r_locale_getstring (IDS_CLEAN);
+
+				text_width = _app_ui_gettextwidth (dis->hDC, config.hfont_ui_bodybold, text);
+				shield_height = is_elevated ? 0 : _app_ui_scale (14, dpi_value);
+				shield_width = is_elevated ? 0 : ((shield_height * 5) / 6);
+
+				left = rect.left + (((width - radius) - (text_width + shield_width + (shield_width ? _app_ui_scale (6, dpi_value) : 0))) / 2);
+
+				if (!is_elevated)
+				{
+					_app_ui_drawshield (dis->hDC, left, rect.top + ((height - shield_height) / 2), shield_height, palette.accenttext);
+
+					left += shield_width + _app_ui_scale (6, dpi_value);
+				}
+
+				textrect.left = left;
+				textrect.top = rect.top;
+				textrect.right = rect.right - radius;
+				textrect.bottom = rect.bottom;
+
+				_app_ui_drawtext (dis->hDC, text, &textrect, config.hfont_ui_bodybold, palette.accenttext, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+			}
+			else
+			{
+				_app_ui_drawchevron (dis->hDC, center_x, center_y, _app_ui_scale (5, dpi_value), _app_ui_scale (2, dpi_value), palette.accenttext);
+			}
+
+			if (GetFocus () == dis->hwndItem)
+			{
+				focus = rect;
+
+				if (dis->CtlID == IDC_CLEAN)
+					focus.right -= radius;
+
+				InsetRect (&focus, _app_ui_scale (3, dpi_value), _app_ui_scale (3, dpi_value));
+
+				_app_ui_drawfocus (dis->hDC, &focus, radius - _app_ui_scale (2, dpi_value), palette.accenttext);
+			}
+
+			break;
+		}
+
+		case IDC_MAINMENU:
+		{
+			if (is_hover || is_pressed)
+				_app_ui_fillroundrect (dis->hDC, &rect, radius, palette.track);
+
+			_app_ui_drawdots (dis->hDC, center_x, center_y, _app_ui_scale (2, dpi_value), _app_ui_scale (7, dpi_value), palette.text);
+
+			if (GetFocus () == dis->hwndItem)
+			{
+				focus = rect;
+
+				InsetRect (&focus, _app_ui_scale (2, dpi_value), _app_ui_scale (2, dpi_value));
+
+				_app_ui_drawfocus (dis->hDC, &focus, radius, palette.text);
+			}
+
+			break;
+		}
+
+		case IDC_SETTINGS:
+		{
+			flags = DT_RIGHT | DT_VCENTER | DT_SINGLELINE;
+
+			if (is_hover)
+				flags |= DT_UNDERLINE;
+
+			_app_ui_drawtext (
+				dis->hDC,
+				_r_locale_getstring (IDS_SETTINGS),
+				&rect,
+				config.hfont_ui_body,
+				is_pressed ? palette.accentpressed : (is_hover ? palette.accenthover : palette.accent),
+				flags
+			);
+
+			if (GetFocus () == dis->hwndItem)
+			{
+				focus = rect;
+
+				InsetRect (&focus, _app_ui_scale (2, dpi_value), _app_ui_scale (2, dpi_value));
+
+				_app_ui_drawfocus (dis->hDC, &focus, radius, palette.text);
+			}
+
+			break;
+		}
+	}
+}
+
+LRESULT CALLBACK _app_ui_buttonproc (
+	_In_ HWND hwnd,
+	_In_ UINT msg,
+	_In_ WPARAM wparam,
+	_In_ LPARAM lparam
+)
+{
+	WNDPROC wnd_proc;
+	TRACKMOUSEEVENT tme = {0};
+
+	wnd_proc = (WNDPROC)_r_wnd_getcontext (hwnd, LONG_MAX);
+
+	if (!wnd_proc)
+		return 0;
+
+	switch (msg)
+	{
+		case WM_MOUSEMOVE:
+		{
+			if (config.hwnd_ui_hover != hwnd)
+			{
+				if (config.hwnd_ui_hover)
+					InvalidateRect (config.hwnd_ui_hover, NULL, FALSE);
+
+				config.hwnd_ui_hover = hwnd;
+
+				InvalidateRect (hwnd, NULL, FALSE);
+
+				tme.cbSize = sizeof (tme);
+				tme.dwFlags = TME_LEAVE;
+				tme.hwndTrack = hwnd;
+
+				TrackMouseEvent (&tme);
+			}
+
+			break;
+		}
+
+		case WM_MOUSELEAVE:
+		{
+			if (config.hwnd_ui_hover == hwnd)
+				config.hwnd_ui_hover = NULL;
+
+			InvalidateRect (hwnd, NULL, FALSE);
+
+			break;
+		}
+
+		case WM_ERASEBKGND:
+		{
+			return TRUE;
+		}
+
+		case WM_SETFOCUS:
+		case WM_KILLFOCUS:
+		{
+			InvalidateRect (hwnd, NULL, FALSE);
+
+			break;
+		}
+
+		case WM_NCDESTROY:
+		{
+			if (config.hwnd_ui_hover == hwnd)
+				config.hwnd_ui_hover = NULL;
+
+			_r_wnd_removecontext (hwnd, LONG_MAX);
+
+			break;
+		}
+	}
+
+	return CallWindowProcW (wnd_proc, hwnd, msg, wparam, lparam);
+}
+
+VOID _app_ui_initialize (
+	_In_ HWND hwnd
+)
+{
+	INT controls[] = {
+		IDC_CLEAN,
+		IDC_CLEANMENU,
+		IDC_MAINMENU,
+		IDC_SETTINGS,
+	};
+
+	HWND hctrl;
+
+	_app_ui_fontscreate (_r_dc_getwindowdpi (hwnd));
+
+	_app_ui_localize (hwnd);
+
+	// the buttons paint themselves, the subclass only tracks hover and focus
+	for (ULONG_PTR i = 0; i < RTL_NUMBER_OF (controls); i++)
+	{
+		hctrl = GetDlgItem (hwnd, controls[i]);
+
+		if (hctrl)
+			_r_wnd_setsubclass (hctrl, GWLP_WNDPROC, &_app_ui_buttonproc);
+	}
+}
+
+VOID _app_ui_showcleanmenu (
+	_In_ HWND hwnd
+)
+{
+	WCHAR buffer[0x100];
+	RECT rect;
+	POINT point;
+	HMENU hmenu;
+	HWND hctrl;
+
+	hmenu = CreatePopupMenu ();
+
+	if (!hmenu)
+		return;
+
+	_r_menu_additem (hmenu, IDM_CLEAN_WORKINGSET, _r_locale_getstring (IDS_MEMREGION_WORKINGSET));
+	_r_menu_additem (hmenu, IDM_CLEAN_SYSTEMFILECACHE, _r_locale_getstring (IDS_MEMREGION_SYSTEMFILECACHE));
+	_r_menu_additem (hmenu, IDM_CLEAN_MODIFIEDFILECACHE, _r_locale_getstring (IDS_MEMREGION_MODIFIEDFILECACHE));
+
+	_r_str_printf (buffer, RTL_NUMBER_OF (buffer), L"%s*", _r_locale_getstring (IDS_MEMREGION_MODIFIEDLIST));
+	_r_menu_additem (hmenu, IDM_CLEAN_MODIFIEDLIST, buffer);
+
+	_r_str_printf (buffer, RTL_NUMBER_OF (buffer), L"%s*", _r_locale_getstring (IDS_MEMREGION_STANDBYLIST));
+	_r_menu_additem (hmenu, IDM_CLEAN_STANDBYLIST, buffer);
+
+	_r_menu_additem (hmenu, IDM_CLEAN_STANDBYLISTPRIORITY0, _r_locale_getstring (IDS_MEMREGION_STANDBYLISTPRIORITY0));
+	_r_menu_additem (hmenu, IDM_CLEAN_REGISTRYCACHE, _r_locale_getstring (IDS_MEMREGION_REGISTRYCACHE));
+	_r_menu_additem (hmenu, IDM_CLEAN_COMBINEMEMORYLISTS, _r_locale_getstring (IDS_MEMREGION_COMBINEMEMORYLISTS));
+
+	hctrl = GetDlgItem (hwnd, IDC_CLEANMENU);
+
+	if (hctrl && GetWindowRect (hctrl, &rect))
+	{
+		point.x = rect.left;
+		point.y = rect.bottom;
+
+		_r_menu_popup (hmenu, hwnd, &point, TRUE);
+	}
+
+	DestroyMenu (hmenu);
+}
+
+VOID _app_ui_showmainmenu (
+	_In_ HWND hwnd,
+	_In_opt_ PPOINT point_at
+)
+{
+	HMENU hmenu, hsubmenu;
+	RECT rect;
+	POINT point;
+	INT command_id;
+	HWND hctrl;
+
+	hmenu = LoadMenuW (_r_sys_getimagebase (), MAKEINTRESOURCEW (IDM_MAIN));
+
+	if (!hmenu)
+		return;
+
+	hsubmenu = GetSubMenu (hmenu, 0);
+
+	if (!hsubmenu)
+	{
+		DestroyMenu (hmenu);
+
+		return;
+	}
+
+	_r_menu_setitemtextformat (hsubmenu, IDM_SETTINGS, FALSE, L"%s...\tF2", _r_locale_getstring (IDS_SETTINGS));
+	_r_menu_setitemtext (hsubmenu, IDM_EXIT, FALSE, _r_locale_getstring (IDS_EXIT));
+	_r_menu_setitemtext (hsubmenu, IDM_ALWAYSONTOP_CHK, FALSE, _r_locale_getstring (IDS_ALWAYSONTOP_CHK));
+	_r_menu_setitemtext (hsubmenu, IDM_LOADONSTARTUP_CHK, FALSE, _r_locale_getstring (IDS_LOADONSTARTUP_CHK));
+	_r_menu_setitemtext (hsubmenu, IDM_USEDARKTHEME, FALSE, _r_locale_getstring (IDS_USEDARKTHEME));
+	_r_menu_setitemtext (hsubmenu, IDM_STARTMINIMIZED_CHK, FALSE, _r_locale_getstring (IDS_STARTMINIMIZED_CHK));
+	_r_menu_setitemtext (hsubmenu, IDM_REDUCTCONFIRMATION_CHK, FALSE, _r_locale_getstring (IDS_REDUCTCONFIRMATION_CHK));
+	_r_menu_setitemtext (hsubmenu, IDM_SKIPUACWARNING_CHK, FALSE, _r_locale_getstring (IDS_SKIPUACWARNING_CHK));
+	_r_menu_setitemtext (hsubmenu, IDM_CHECKUPDATES_CHK, FALSE, _r_locale_getstring (IDS_CHECKUPDATES_CHK));
+	_r_menu_setitemtext (hsubmenu, LANG_MENU, TRUE, _r_locale_getstring (IDS_LANGUAGE));
+	_r_menu_setitemtext (hsubmenu, IDM_WEBSITE, FALSE, _r_locale_getstring (IDS_WEBSITE));
+	_r_menu_setitemtext (hsubmenu, IDM_CHECKUPDATES, FALSE, _r_locale_getstring (IDS_CHECKUPDATES));
+	_r_menu_setitemtextformat (hsubmenu, IDM_ABOUT, FALSE, L"%s\tF1", _r_locale_getstring (IDS_ABOUT));
+
+	_r_menu_checkitem (hsubmenu, IDM_ALWAYSONTOP_CHK, 0, MF_BYCOMMAND, _r_config_getboolean_ex (L"AlwaysOnTop", FALSE, NULL));
+	_r_menu_checkitem (hsubmenu, IDM_USEDARKTHEME, 0, MF_BYCOMMAND, _r_theme_isenabled ());
+	_r_menu_checkitem (hsubmenu, IDM_LOADONSTARTUP_CHK, 0, MF_BYCOMMAND, _r_autorun_isenabled ());
+	_r_menu_checkitem (hsubmenu, IDM_STARTMINIMIZED_CHK, 0, MF_BYCOMMAND, _r_config_getboolean_ex (L"IsStartMinimized", FALSE, NULL));
+	_r_menu_checkitem (hsubmenu, IDM_REDUCTCONFIRMATION_CHK, 0, MF_BYCOMMAND, _r_config_getboolean_ex (L"IsShowReductConfirmation", TRUE, NULL));
+	_r_menu_checkitem (hsubmenu, IDM_SKIPUACWARNING_CHK, 0, MF_BYCOMMAND, _r_skipuac_isenabled ());
+	_r_menu_checkitem (hsubmenu, IDM_CHECKUPDATES_CHK, 0, MF_BYCOMMAND, _app_update_isenabled ());
+
+	if (!_r_sys_iselevated ())
+		_r_menu_enableitem (hsubmenu, IDM_SKIPUACWARNING_CHK, FALSE, FALSE);
+
+	// the language submenu is rebuilt with the available locales every time the menu is opened
+	_r_locale_enum (hsubmenu, LANG_MENU, IDX_LANGUAGE);
+
+	if (point_at)
+	{
+		point = *point_at;
+	}
+	else
+	{
+		hctrl = GetDlgItem (hwnd, IDC_MAINMENU);
+
+		if (!hctrl || !GetWindowRect (hctrl, &rect))
+		{
+			DestroyMenu (hmenu);
+
+			return;
+		}
+
+		point.x = rect.right;
+		point.y = rect.bottom;
+	}
+
+	command_id = TrackPopupMenuEx (
+		hsubmenu,
+		TPM_RIGHTALIGN | TPM_NONOTIFY | TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTBUTTON,
+		point.x,
+		point.y,
+		hwnd,
+		NULL
+	);
+
+	if (command_id)
+		_r_ctrl_sendcommand (hwnd, command_id, 0);
+
+	DestroyMenu (hmenu);
+}
+
 HICON _app_iconcreate (
 	_In_opt_ ULONG percent
 )
@@ -887,24 +2074,6 @@ HICON _app_iconcreate (
 	return hicon_new;
 }
 
-BOOLEAN _app_listviewsettext (
-	_In_ HWND hwnd,
-	_In_ INT item_id,
-	_In_ INT subitem_id,
-	_In_ LPWSTR text
-)
-{
-	// pushing an unchanged string still repaints the row, so remember what the list already shows
-	if (_r_str_compare (text, config.item_prev[item_id], FALSE) == 0)
-		return FALSE;
-
-	_r_str_copy (config.item_prev[item_id], RTL_NUMBER_OF (config.item_prev[item_id]), text);
-
-	_r_listview_setitem (hwnd, IDC_LISTVIEW, item_id, subitem_id, text, I_DEFAULT, I_DEFAULT, I_DEFAULT);
-
-	return TRUE;
-}
-
 VOID CALLBACK _app_timercallback (
 	_In_ HWND hwnd,
 	_In_ UINT msg,
@@ -913,20 +2082,31 @@ VOID CALLBACK _app_timercallback (
 )
 {
 	R_MEMORY_INFO mem_info;
-	WCHAR buffer[0x80];
 	WCHAR tooltip[0x80];
 	HICON hicon = NULL;
 	HICON hicon_prev = NULL;
 	LONG64 timestamp;
 	ULONG limit_value;
-	ULONG percent;
+	ULONG pending_mask;
 	BOOLEAN is_clean = FALSE;
-	BOOLEAN is_redraw = FALSE;
 
 	if (id_event != UID)
 		return;
 
 	_app_getmemoryinfo (&mem_info);
+
+	// a clean clicked without administrator rights is armed in the config, because the elevated copy starts empty-handed
+	if (msg == WM_TIMER && _r_sys_iselevated ())
+	{
+		pending_mask = _r_config_getulong_ex (L"CleanPendingMask", 0, NULL);
+
+		if (pending_mask)
+		{
+			_r_config_setulong_ex (L"CleanPendingMask", 0, NULL);
+
+			_app_memoryclean (hwnd, SOURCE_MANUAL, pending_mask);
+		}
+	}
 
 	// autocleanup functional (settings and dpi changes reuse this routine, they must not trigger a clean)
 	if (msg == WM_TIMER && _r_sys_iselevated ())
@@ -957,6 +2137,10 @@ VOID CALLBACK _app_timercallback (
 		if (is_clean)
 			_app_memoryclean (hwnd, SOURCE_AUTO, 0);
 	}
+
+	// the app lives in the tray for weeks, so a period set only at startup would never fire again
+	if (msg == WM_TIMER && _app_update_isready ())
+		_app_update_check (hwnd, TRUE);
 
 	// check previous percent to prevent icon redraw
 	if (!config.ms_prev || config.ms_prev != mem_info.physical_memory.percent)
@@ -1000,67 +2184,9 @@ VOID CALLBACK _app_timercallback (
 	if (!_r_wnd_isvisible (hwnd, FALSE))
 		return;
 
-	// set item lparam information, the colour indication reads it back on every draw
-	for (INT i = 0; i < _r_listview_getitemcount (hwnd, IDC_LISTVIEW); i++)
-	{
-		if (i < 3)
-		{
-			percent = mem_info.physical_memory.percent;
-		}
-		else if (i < 6)
-		{
-			percent = mem_info.page_file.percent;
-		}
-		else if (i < 9)
-		{
-			percent = mem_info.system_cache.percent;
-		}
-		else
-		{
-			continue;
-		}
-
-		if ((ULONG)_r_listview_getitemlparam (hwnd, IDC_LISTVIEW, i) == percent)
-			continue;
-
-		_r_listview_setitem (hwnd, IDC_LISTVIEW, i, 0, NULL, I_DEFAULT, I_DEFAULT, (LPARAM)percent);
-
-		is_redraw = TRUE;
-	}
-
-	// physical memory
-	_r_str_printf (buffer, RTL_NUMBER_OF (buffer), L"%" TEXT (PR_DOUBLE) L"%%", mem_info.physical_memory.percent_f);
-	is_redraw |= _app_listviewsettext (hwnd, 0, 1, buffer);
-
-	_r_format_bytesize64 (buffer, RTL_NUMBER_OF (buffer), mem_info.physical_memory.free_bytes);
-	is_redraw |= _app_listviewsettext (hwnd, 1, 1, buffer);
-
-	_r_format_bytesize64 (buffer, RTL_NUMBER_OF (buffer), mem_info.physical_memory.total_bytes);
-	is_redraw |= _app_listviewsettext (hwnd, 2, 1, buffer);
-
-	// pagefile
-	_r_str_printf (buffer, RTL_NUMBER_OF (buffer), L"%" TEXT (PR_DOUBLE) L"%%", mem_info.page_file.percent_f);
-	is_redraw |= _app_listviewsettext (hwnd, 3, 1, buffer);
-
-	_r_format_bytesize64 (buffer, RTL_NUMBER_OF (buffer), mem_info.page_file.free_bytes);
-	is_redraw |= _app_listviewsettext (hwnd, 4, 1, buffer);
-
-	_r_format_bytesize64 (buffer, RTL_NUMBER_OF (buffer), mem_info.page_file.total_bytes);
-	is_redraw |= _app_listviewsettext (hwnd, 5, 1, buffer);
-
-	// system cache
-	_r_str_printf (buffer, RTL_NUMBER_OF (buffer), L"%" TEXT (PR_DOUBLE) L"%%", mem_info.system_cache.percent_f);
-	is_redraw |= _app_listviewsettext (hwnd, 6, 1, buffer);
-
-	_r_format_bytesize64 (buffer, RTL_NUMBER_OF (buffer), mem_info.system_cache.free_bytes);
-	is_redraw |= _app_listviewsettext (hwnd, 7, 1, buffer);
-
-	_r_format_bytesize64 (buffer, RTL_NUMBER_OF (buffer), mem_info.system_cache.total_bytes);
-	is_redraw |= _app_listviewsettext (hwnd, 8, 1, buffer);
-
-	// an idle machine stops producing new values, so the list is not repainted at all then
-	if (is_redraw)
-		_r_listview_redraw (hwnd, IDC_LISTVIEW);
+	// an idle machine keeps producing the same numbers, so the card is repainted only when one changed
+	if (_app_ui_updatemetrics (&mem_info))
+		InvalidateRect (hwnd, NULL, FALSE);
 }
 
 VOID _app_iconredraw (
@@ -1629,11 +2755,7 @@ INT_PTR CALLBACK SettingsProc (
 			}
 
 			if (is_stylechanged)
-			{
 				_app_iconredraw (_r_app_gethwnd ());
-
-				_r_listview_redraw (_r_app_gethwnd (), IDC_LISTVIEW);
-			}
 
 			break;
 		}
@@ -1706,8 +2828,6 @@ INT_PTR CALLBACK SettingsProc (
 						}
 
 						_app_iconredraw (_r_app_gethwnd ());
-
-						_r_listview_redraw (_r_app_gethwnd (), IDC_LISTVIEW);
 					}
 
 					break;
@@ -1718,8 +2838,6 @@ INT_PTR CALLBACK SettingsProc (
 					BOOLEAN is_enable = _r_ctrl_isbuttonchecked (hwnd, ctrl_id);
 
 					_r_config_setboolean_ex (L"AlwaysOnTop", is_enable, NULL);
-
-					_r_menu_checkitem (GetMenu (_r_app_gethwnd ()), IDM_ALWAYSONTOP_CHK, 0, MF_BYCOMMAND, is_enable);
 
 					break;
 				}
@@ -1732,8 +2850,6 @@ INT_PTR CALLBACK SettingsProc (
 
 					is_enable = _r_autorun_isenabled ();
 
-					_r_menu_checkitem (GetMenu (_r_app_gethwnd ()), IDM_LOADONSTARTUP_CHK, 0, MF_BYCOMMAND, is_enable);
-
 					_r_ctrl_checkbutton (hwnd, ctrl_id, is_enable);
 
 					break;
@@ -1745,8 +2861,6 @@ INT_PTR CALLBACK SettingsProc (
 
 					_r_config_setboolean_ex (L"IsStartMinimized", is_enable, NULL);
 
-					_r_menu_checkitem (GetMenu (_r_app_gethwnd ()), IDM_STARTMINIMIZED_CHK, 0, MF_BYCOMMAND, is_enable);
-
 					break;
 				}
 
@@ -1755,8 +2869,6 @@ INT_PTR CALLBACK SettingsProc (
 					BOOLEAN is_enable = _r_ctrl_isbuttonchecked (hwnd, ctrl_id);
 
 					_r_config_setboolean_ex (L"IsShowReductConfirmation", is_enable, NULL);
-
-					_r_menu_checkitem (GetMenu (_r_app_gethwnd ()), IDM_REDUCTCONFIRMATION_CHK, 0, MF_BYCOMMAND, is_enable);
 
 					break;
 				}
@@ -1769,8 +2881,6 @@ INT_PTR CALLBACK SettingsProc (
 
 					is_enable = _r_skipuac_isenabled ();
 
-					_r_menu_checkitem (GetMenu (_r_app_gethwnd ()), IDM_SKIPUACWARNING_CHK, 0, MF_BYCOMMAND, is_enable);
-
 					_r_ctrl_checkbutton (hwnd, ctrl_id, is_enable);
 
 					break;
@@ -1781,10 +2891,6 @@ INT_PTR CALLBACK SettingsProc (
 					BOOLEAN is_enable = _r_ctrl_isbuttonchecked (hwnd, ctrl_id);
 
 					_app_update_enable (is_enable);
-
-					is_enable = _app_update_isenabled ();
-
-					_r_menu_checkitem (GetMenu (_r_app_gethwnd ()), IDM_CHECKUPDATES_CHK, 0, MF_BYCOMMAND, is_enable);
 
 					break;
 				}
@@ -2709,14 +3815,6 @@ BOOLEAN _app_update_check (
 	return TRUE;
 }
 
-VOID _app_resizecolumns (
-	_In_ HWND hwnd
-)
-{
-	_r_listview_setcolumn (hwnd, IDC_LISTVIEW, 0, NULL, -50);
-	_r_listview_setcolumn (hwnd, IDC_LISTVIEW, 1, NULL, -50);
-}
-
 VOID _app_initialize (
 	_In_opt_ HWND hwnd
 )
@@ -2735,35 +3833,17 @@ VOID _app_initialize (
 		if (status != STATUS_SUCCESS)
 			_r_log (LOG_LEVEL_WARNING, NULL, L"_r_sys_setprocessprivilege", status, L"SeProfileSingleProcessPrivilege");
 	}
-	else
-	{
-		if (hwnd)
-			_r_ctrl_setbuttonshield (hwnd, IDC_CLEAN, TRUE);
-	}
 
 	if (!hwnd)
 		return;
 
-	_r_ctrl_setbuttonmargins (hwnd, IDC_CLEAN, _r_dc_getwindowdpi (hwnd));
+	_app_ui_initialize (hwnd);
 
-	// configure listview
-	_r_listview_setstyle (hwnd, IDC_LISTVIEW, LVS_EX_FULLROWSELECT | LVS_EX_INFOTIP | LVS_EX_LABELTIP | LVS_EX_DOUBLEBUFFER, TRUE);
+	_app_ui_setsize (hwnd, _r_dc_getwindowdpi (hwnd));
 
-	_r_listview_addcolumn (hwnd, IDC_LISTVIEW, 1, NULL, 10, LVCFMT_RIGHT);
-	_r_listview_addcolumn (hwnd, IDC_LISTVIEW, 2, NULL, 10, LVCFMT_LEFT);
+	_app_ui_layoutcontrols (hwnd, _r_dc_getwindowdpi (hwnd));
 
-	_app_resizecolumns (hwnd);
-
-	// configure listview
-	for (INT i = 0, k = 0; i < 3; i++)
-	{
-		_r_listview_addgroup (hwnd, IDC_LISTVIEW, i, _r_locale_getstring (IDS_GROUP_1 + i), 0, LVGS_COLLAPSIBLE, LVGS_COLLAPSIBLE);
-
-		for (INT j = 0; j < 3; j++)
-		{
-			_r_listview_additem (hwnd, IDC_LISTVIEW, k++, _r_locale_getstring (IDS_ITEM_1 + j), I_DEFAULT, i, 0);
-		}
-	}
+	_app_ui_updatemetrics (NULL);
 
 	// settings
 	_r_settings_addpage (IDD_SETTINGS_GENERAL, IDS_SETTINGS_GENERAL);
@@ -2833,6 +3913,9 @@ INT_PTR CALLBACK DlgProc (
 
 			_app_initialize (hwnd);
 
+			// the dialog template has no default button, so enter would do nothing without this
+			SendMessageW (hwnd, DM_SETDEFID, IDC_CLEAN, 0);
+
 			SetTimer (hwnd, UID, TIMER, &_app_timercallback);
 
 			break;
@@ -2864,6 +3947,8 @@ INT_PTR CALLBACK DlgProc (
 
 			_r_tray_destroy (hwnd, &GUID_TrayIcon);
 
+			_app_ui_fontsfree ();
+
 			// the tray does not own this icon, it is the one created by _app_iconcreate
 			if (config.hicon)
 			{
@@ -2886,23 +3971,12 @@ INT_PTR CALLBACK DlgProc (
 
 		case RM_INITIALIZE:
 		{
-			HMENU hmenu;
+			// the window is created at the size of the dialog template, the pixel size is pinned again here
+			_app_ui_setsize (hwnd, _r_dc_getwindowdpi (hwnd));
 
-			hmenu = GetMenu (hwnd);
+			_app_ui_layoutcontrols (hwnd, _r_dc_getwindowdpi (hwnd));
 
-			if (hmenu)
-			{
-				_r_menu_checkitem (hmenu, IDM_ALWAYSONTOP_CHK, 0, MF_BYCOMMAND, _r_config_getboolean_ex (L"AlwaysOnTop", FALSE, NULL));
-				_r_menu_checkitem (hmenu, IDM_USEDARKTHEME, 0, MF_BYCOMMAND, _r_theme_isenabled ());
-				_r_menu_checkitem (hmenu, IDM_LOADONSTARTUP_CHK, 0, MF_BYCOMMAND, _r_autorun_isenabled ());
-				_r_menu_checkitem (hmenu, IDM_STARTMINIMIZED_CHK, 0, MF_BYCOMMAND, _r_config_getboolean_ex (L"IsStartMinimized", FALSE, NULL));
-				_r_menu_checkitem (hmenu, IDM_REDUCTCONFIRMATION_CHK, 0, MF_BYCOMMAND, _r_config_getboolean_ex (L"IsShowReductConfirmation", TRUE, NULL));
-				_r_menu_checkitem (hmenu, IDM_SKIPUACWARNING_CHK, 0, MF_BYCOMMAND, _r_skipuac_isenabled ());
-				_r_menu_checkitem (hmenu, IDM_CHECKUPDATES_CHK, 0, MF_BYCOMMAND, _app_update_isenabled ());
-
-				if (!_r_sys_iselevated ())
-					_r_menu_enableitem (hmenu, IDM_SKIPUACWARNING_CHK, FALSE, FALSE);
-			}
+			_app_ui_updatemetrics (NULL);
 
 			_app_trayiconrefresh (hwnd);
 
@@ -2929,67 +4003,38 @@ INT_PTR CALLBACK DlgProc (
 
 		case RM_LOCALIZE:
 		{
-			// localize menu
-			HMENU hmenu;
+			_app_ui_localize (hwnd);
 
-			hmenu = GetMenu (hwnd);
-
-			if (hmenu)
-			{
-				_r_menu_setitemtext (hmenu, 0, TRUE, _r_locale_getstring (IDS_FILE));
-				_r_menu_setitemtext (hmenu, 1, TRUE, _r_locale_getstring (IDS_VIEW));
-				_r_menu_setitemtext (hmenu, 2, TRUE, _r_locale_getstring (IDS_SETTINGS));
-				_r_menu_setitemtext (hmenu, 3, TRUE, _r_locale_getstring (IDS_HELP));
-
-				_r_menu_setitemtextformat (hmenu, IDM_SETTINGS, FALSE, L"%s...\tF2", _r_locale_getstring (IDS_SETTINGS));
-				_r_menu_setitemtext (hmenu, IDM_EXIT, FALSE, _r_locale_getstring (IDS_EXIT));
-				_r_menu_setitemtext (hmenu, IDM_ALWAYSONTOP_CHK, FALSE, _r_locale_getstring (IDS_ALWAYSONTOP_CHK));
-				_r_menu_setitemtext (hmenu, IDM_LOADONSTARTUP_CHK, FALSE, _r_locale_getstring (IDS_LOADONSTARTUP_CHK));
-				_r_menu_setitemtext (hmenu, IDM_USEDARKTHEME, FALSE, _r_locale_getstring (IDS_USEDARKTHEME));
-				_r_menu_setitemtext (hmenu, IDM_STARTMINIMIZED_CHK, FALSE, _r_locale_getstring (IDS_STARTMINIMIZED_CHK));
-				_r_menu_setitemtext (hmenu, IDM_REDUCTCONFIRMATION_CHK, FALSE, _r_locale_getstring (IDS_REDUCTCONFIRMATION_CHK));
-				_r_menu_setitemtext (hmenu, IDM_SKIPUACWARNING_CHK, FALSE, _r_locale_getstring (IDS_SKIPUACWARNING_CHK));
-				_r_menu_setitemtext (hmenu, IDM_CHECKUPDATES_CHK, FALSE, _r_locale_getstring (IDS_CHECKUPDATES_CHK));
-				_r_menu_setitemtext (GetSubMenu (hmenu, LANG_SUBMENU), LANG_MENU, TRUE, _r_locale_getstring (IDS_LANGUAGE));
-				_r_menu_setitemtext (hmenu, IDM_WEBSITE, FALSE, _r_locale_getstring (IDS_WEBSITE));
-				_r_menu_setitemtext (hmenu, IDM_CHECKUPDATES, FALSE, _r_locale_getstring (IDS_CHECKUPDATES));
-				_r_menu_setitemtextformat (hmenu, IDM_ABOUT, FALSE, L"%s\tF1", _r_locale_getstring (IDS_ABOUT));
-			}
-
-			// configure listview
-			for (INT i = 0, k = 0; i < 3; i++)
-			{
-				_r_listview_setgroup (hwnd, IDC_LISTVIEW, i, _r_locale_getstring (IDS_GROUP_1 + i), 0, 0);
-
-				for (INT j = 0; j < 3; j++)
-				{
-					_r_listview_setitem (hwnd, IDC_LISTVIEW, k++, 0, _r_locale_getstring (IDS_ITEM_1 + j), I_DEFAULT, I_DEFAULT, I_DEFAULT);
-				}
-			}
-
-			// the numbers and the group names are locale dependent, so drop the strings cached for the update skip
-			RtlZeroMemory (config.item_prev, sizeof (config.item_prev));
+			// the cached strings are locale dependent, so drop them and format them again
 			RtlZeroMemory (config.tooltip_prev, sizeof (config.tooltip_prev));
 
-			// configure button
-			_r_ctrl_setstring (hwnd, IDC_CLEAN, _r_locale_getstring (IDS_CLEAN));
+			config.ui_hasdata = FALSE;
 
-			// enum localizations
-			if (hmenu)
-				_r_locale_enum (GetSubMenu (hmenu, LANG_SUBMENU), LANG_MENU, IDX_LANGUAGE);
+			_app_ui_updatemetrics (NULL);
+
+			_app_ui_invalidate (hwnd);
 
 			break;
 		}
 
 		case WM_DPICHANGED:
 		{
+			RECT* rect = (RECT*)lparam;
+
 			_app_iconinit (_r_dc_gettaskbardpi ());
 			_app_iconredraw (hwnd);
 
-			_app_resizecolumns (hwnd);
+			_app_ui_fontscreate (LOWORD (wparam));
 
-			if (!_r_sys_iselevated ())
-				_r_ctrl_setbuttonmargins (hwnd, IDC_CLEAN, LOWORD (wparam));
+			_app_ui_setsize (hwnd, LOWORD (wparam));
+
+			_app_ui_layoutcontrols (hwnd, LOWORD (wparam));
+
+			// routine's dpi handler is a stub, so the suggested rectangle is applied here
+			if (rect)
+				SetWindowPos (hwnd, NULL, rect->left, rect->top, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+			_app_ui_invalidate (hwnd);
 
 			break;
 		}
@@ -3016,6 +4061,8 @@ INT_PTR CALLBACK DlgProc (
 
 				if (hsettings)
 					_r_theme_initialize (hsettings, _r_theme_isenabled ());
+
+				_app_ui_invalidate (hwnd);
 			}
 
 			break;
@@ -3028,14 +4075,40 @@ INT_PTR CALLBACK DlgProc (
 
 			hdc = BeginPaint (hwnd, &ps);
 
-			if (!hdc)
-				break;
-
-			_r_dc_drawwindow (hdc, hwnd, TRUE);
+			if (hdc)
+				_app_ui_paint (hwnd, hdc);
 
 			EndPaint (hwnd, &ps);
 
 			break;
+		}
+
+		case WM_ERASEBKGND:
+		{
+			// the whole client area is painted by WM_PAINT, letting the default handler erase it would flicker
+			return TRUE;
+		}
+
+		case WM_DRAWITEM:
+		{
+			LPDRAWITEMSTRUCT dis = (LPDRAWITEMSTRUCT)lparam;
+
+			if (dis->CtlType == ODT_BUTTON)
+				_app_ui_drawbutton (dis);
+
+			return TRUE;
+		}
+
+		case WM_CONTEXTMENU:
+		{
+			POINT point = {GET_X_LPARAM (lparam), GET_Y_LPARAM (lparam)};
+
+			if (point.x == -1 && point.y == -1)
+				_app_ui_showmainmenu (hwnd, NULL);
+			else
+				_app_ui_showmainmenu (hwnd, &point);
+
+			return TRUE;
 		}
 
 		case WM_HOTKEY:
@@ -3050,103 +4123,6 @@ INT_PTR CALLBACK DlgProc (
 		{
 			if (wparam)
 				_app_iconredraw (hwnd);
-
-			break;
-		}
-
-		case WM_NOTIFY:
-		{
-			LPNMHDR nmlp = (LPNMHDR)lparam;
-
-			switch (nmlp->code)
-			{
-				case BCN_DROPDOWN:
-				{
-					R_RECTANGLE rectangle;
-					WCHAR buffer[0x100];
-					RECT rect;
-					HMENU hmenu;
-
-					hmenu = CreatePopupMenu ();
-
-					if (!hmenu)
-						break;
-
-					_r_menu_additem (hmenu, IDM_CLEAN_WORKINGSET, _r_locale_getstring (IDS_MEMREGION_WORKINGSET));
-					_r_menu_additem (hmenu, IDM_CLEAN_SYSTEMFILECACHE, _r_locale_getstring (IDS_MEMREGION_SYSTEMFILECACHE));
-					_r_menu_additem (hmenu, IDM_CLEAN_MODIFIEDFILECACHE, _r_locale_getstring (IDS_MEMREGION_MODIFIEDFILECACHE));
-
-					_r_str_printf (buffer, RTL_NUMBER_OF (buffer), L"%s*", _r_locale_getstring (IDS_MEMREGION_MODIFIEDLIST));
-					_r_menu_additem (hmenu, IDM_CLEAN_MODIFIEDLIST, buffer);
-
-					_r_str_printf (buffer, RTL_NUMBER_OF (buffer), L"%s*", _r_locale_getstring (IDS_MEMREGION_STANDBYLIST));
-					_r_menu_additem (hmenu, IDM_CLEAN_STANDBYLIST, buffer);
-
-					_r_menu_additem (hmenu, IDM_CLEAN_STANDBYLISTPRIORITY0, _r_locale_getstring (IDS_MEMREGION_STANDBYLISTPRIORITY0));
-
-					_r_menu_additem (hmenu, IDM_CLEAN_REGISTRYCACHE, _r_locale_getstring (IDS_MEMREGION_REGISTRYCACHE));
-
-					_r_menu_additem (hmenu, IDM_CLEAN_COMBINEMEMORYLISTS, _r_locale_getstring (IDS_MEMREGION_COMBINEMEMORYLISTS));
-
-					if (GetClientRect (nmlp->hwndFrom, &rect))
-					{
-						ClientToScreen (nmlp->hwndFrom, (PPOINT)&rect);
-
-						_r_wnd_recttorectangle (&rectangle, &rect);
-						_r_wnd_adjustrectangletoworkingarea (&rectangle, nmlp->hwndFrom);
-						_r_wnd_rectangletorect (&rect, &rectangle);
-
-						_r_menu_popup (hmenu, hwnd, (PPOINT)&rect, TRUE);
-					}
-
-					DestroyMenu (hmenu);
-
-					break;
-				}
-
-				case NM_CUSTOMDRAW:
-				{
-					LPNMLVCUSTOMDRAW lpnmlv = (LPNMLVCUSTOMDRAW)lparam;
-					LONG_PTR result = CDRF_DODEFAULT;
-					ULONG value;
-
-					if (nmlp->idFrom != IDC_LISTVIEW)
-						break;
-
-					switch (lpnmlv->nmcd.dwDrawStage)
-					{
-						case CDDS_PREPAINT:
-						{
-							result = (CDRF_NOTIFYPOSTPAINT | CDRF_NOTIFYITEMDRAW);
-							break;
-						}
-
-						case CDDS_ITEMPREPAINT:
-						{
-							value = (ULONG)lpnmlv->nmcd.lItemlParam;
-
-							if (value >= _app_getdangervalue ())
-							{
-								lpnmlv->clrText = _r_config_getulong_ex (L"TrayColorDanger", TRAY_COLOR_DANGER, NULL);
-
-								result = (CDRF_NOTIFYPOSTPAINT | CDRF_NEWFONT);
-							}
-							else if (value >= _app_getwarningvalue ())
-							{
-								lpnmlv->clrText = _r_config_getulong_ex (L"TrayColorWarning", TRAY_COLOR_WARNING, NULL);
-
-								result = (CDRF_NOTIFYPOSTPAINT | CDRF_NEWFONT);
-							}
-
-							break;
-						}
-					}
-
-					SetWindowLongPtrW (hwnd, DWLP_MSGRESULT, result);
-
-					return result;
-				}
-			}
 
 			break;
 		}
@@ -3218,7 +4194,12 @@ INT_PTR CALLBACK DlgProc (
 					hsubmenu = GetSubMenu (hmenu, 0);
 
 					if (!hsubmenu)
+					{
+						// the popup cannot be shown, but the menu we just loaded still belongs to us
+						DestroyMenu (hmenu);
+
 						break;
+					}
 
 					hsubmenu_region = GetSubMenu (hsubmenu, TRAY_SUBMENU_1);
 					hsubmenu_limit = GetSubMenu (hsubmenu, TRAY_SUBMENU_2);
@@ -3320,17 +4301,7 @@ INT_PTR CALLBACK DlgProc (
 
 			if (notify_code == 0 && ctrl_id >= IDX_LANGUAGE && ctrl_id <= IDX_LANGUAGE + (INT)(INT_PTR)_r_locale_getcount () + 1)
 			{
-				HMENU hmenu, hsubmenu;
-
-				hmenu = GetMenu (hwnd);
-
-				if (hmenu)
-				{
-					hsubmenu = GetSubMenu (GetSubMenu (hmenu, LANG_SUBMENU), LANG_MENU);
-
-					if (hsubmenu)
-						_r_locale_apply (hsubmenu, ctrl_id, IDX_LANGUAGE);
-				}
+				_r_locale_apply (NULL, ctrl_id, IDX_LANGUAGE);
 
 				return FALSE;
 			}
@@ -3359,8 +4330,6 @@ INT_PTR CALLBACK DlgProc (
 				{
 					BOOLEAN new_val = _app_config_invertboolean (L"AlwaysOnTop", FALSE);
 
-					_r_menu_checkitem (GetMenu (hwnd), ctrl_id, 0, MF_BYCOMMAND, new_val);
-
 					_r_wnd_top (hwnd, new_val);
 
 					break;
@@ -3368,18 +4337,14 @@ INT_PTR CALLBACK DlgProc (
 
 				case IDM_STARTMINIMIZED_CHK:
 				{
-					BOOLEAN new_val = _app_config_invertboolean (L"IsStartMinimized", FALSE);
-
-					_r_menu_checkitem (GetMenu (hwnd), ctrl_id, 0, MF_BYCOMMAND, new_val);
+					_app_config_invertboolean (L"IsStartMinimized", FALSE);
 
 					break;
 				}
 
 				case IDM_REDUCTCONFIRMATION_CHK:
 				{
-					BOOLEAN new_val = _app_config_invertboolean (L"IsShowReductConfirmation", TRUE);
-
-					_r_menu_checkitem (GetMenu (hwnd), ctrl_id, 0, MF_BYCOMMAND, new_val);
+					_app_config_invertboolean (L"IsShowReductConfirmation", TRUE);
 
 					break;
 				}
@@ -3387,7 +4352,6 @@ INT_PTR CALLBACK DlgProc (
 				case IDM_LOADONSTARTUP_CHK:
 				{
 					_r_autorun_enable (hwnd, !_r_autorun_isenabled ());
-					_r_menu_checkitem (GetMenu (hwnd), ctrl_id, 0, MF_BYCOMMAND, _r_autorun_isenabled ());
 
 					break;
 				}
@@ -3405,15 +4369,12 @@ INT_PTR CALLBACK DlgProc (
 					if (hsettings)
 						_r_theme_initialize (hsettings, is_enabled);
 
-					_r_menu_checkitem (GetMenu (hwnd), ctrl_id, 0, MF_BYCOMMAND, is_enabled);
-
 					break;
 				}
 
 				case IDM_SKIPUACWARNING_CHK:
 				{
 					_r_skipuac_enable (hwnd, !_r_skipuac_isenabled ());
-					_r_menu_checkitem (GetMenu (hwnd), ctrl_id, 0, MF_BYCOMMAND, _r_skipuac_isenabled ());
 
 					break;
 				}
@@ -3422,7 +4383,6 @@ INT_PTR CALLBACK DlgProc (
 				{
 					BOOLEAN new_val = !_app_update_isenabled ();
 
-					_r_menu_checkitem (GetMenu (hwnd), ctrl_id, 0, MF_BYCOMMAND, new_val);
 					_app_update_enable (new_val);
 
 					break;
@@ -3590,6 +4550,7 @@ INT_PTR CALLBACK DlgProc (
 
 				case IDM_SETTINGS:
 				case IDM_TRAY_SETTINGS:
+				case IDC_SETTINGS:
 				{
 					_r_settings_createwindow (hwnd, &SettingsProc, 0);
 					break;
@@ -3609,6 +4570,20 @@ INT_PTR CALLBACK DlgProc (
 					break;
 				}
 
+				case IDC_CLEANMENU:
+				{
+					_app_ui_showcleanmenu (hwnd);
+
+					break;
+				}
+
+				case IDC_MAINMENU:
+				{
+					_app_ui_showmainmenu (hwnd, NULL);
+
+					break;
+				}
+
 				case IDOK: // process Enter key
 				case IDC_CLEAN:
 				case IDM_TRAY_CLEAN:
@@ -3619,12 +4594,16 @@ INT_PTR CALLBACK DlgProc (
 					}
 					else
 					{
+						_app_cleanpending_set (0);
+
 						if (_r_app_runasadmin ())
 						{
 							DestroyWindow (hwnd);
 						}
 						else
 						{
+							_r_config_setulong_ex (L"CleanPendingMask", 0, NULL);
+
 							_r_show_message (hwnd, MB_OK | MB_ICONSTOP, _r_app_getname (), _r_locale_getstring (IDS_STATUS_NOPRIVILEGES));
 						}
 					}
