@@ -10,6 +10,11 @@
 
 DEFINE_GUID (GUID_TrayIcon, 0xAE9053F0, 0x8D59, 0x4803, 0x9A, 0xBB, 0x74, 0xAF, 0xE6, 0x6B, 0x5F, 0xD2);
 
+// the sdk only exposes DT_UNDERLINE when a minimum windows version is declared, this project declares none
+#ifndef DT_UNDERLINE
+#define DT_UNDERLINE 0x00010000
+#endif
+
 
 #define TIMER 1000
 #define UID 1337
