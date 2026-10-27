@@ -163,7 +163,14 @@ jobs:
         shell: pwsh
         run: |
           choco install nsis --no-progress -y
-          "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+          # the compiler sits in a different folder for the 32-bit and for the 64-bit package, so it is looked up
+          $makensis = Get-ChildItem 'C:\Program Files (x86)\NSIS', 'C:\Program Files\NSIS' -Filter 'makensis.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+
+          if (-not $makensis) { Write-Error 'makensis.exe was not found - the nsis package did not install'; exit 1 }
+
+          $makensis.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append
+          $makensis.FullName
 
       - name: Stage packages
         id: stage
@@ -234,26 +241,61 @@ jobs:
 
           # builder still lets Windows 7 install, but the app needs the Windows 10 memory APIs
           # WinVer.nsh has no service pack granularity, so the gate is Windows 10; README states the tested 21H1 floor
-          foreach ($upgrade in @(
+          # the fork signs as Lumina, the original author stays in the copyright line
+          foreach ($replacement in @(
             @('; Windows 7 and later only', '; Windows 10 and later only'),
             @('${IfNot} ${AtLeastWin7}', '${IfNot} ${AtLeastWin10}'),
-            @('MessageBox MB_OK|MB_ICONEXCLAMATION ''$(RequireWindows7)''', 'MessageBox MB_OK|MB_ICONEXCLAMATION ''${APP_NAME} requires Windows 10 and later!''')
+            @('MessageBox MB_OK|MB_ICONEXCLAMATION ''$(RequireWindows7)''', 'MessageBox MB_OK|MB_ICONEXCLAMATION ''${APP_NAME} requires Windows 10 and later!'''),
+            @('!define APP_AUTHOR         "Henry++"', '!define APP_AUTHOR         "Lumina"'),
+            @('!define APP_WEBSITE        "https://github.com/henrypp"', '!define APP_WEBSITE        "https://github.com/ninokiru/Mem-Reduct"'),
+            @('!define COPYRIGHT          "(c) ${CURRENT_YEAR} ${APP_AUTHOR}. All Rights Reversed."', '!define COPYRIGHT          "(c) ${CURRENT_YEAR} ${APP_AUTHOR}. Based on original work (c) 2011-2026 Henry++."'),
+            # the lzma encoder rejects a 128 mb dictionary and the compiler dies with 'deflateInit() failed'
+            @('SetCompressorDictSize 128', 'SetCompressorDictSize 64')
           )) {
-            if (-not $text.Contains($upgrade[0])) { Write-Error ("builder changed its os gate, cannot find: " + $upgrade[0]); exit 1 }
+            if (-not $text.Contains($replacement[0])) { Write-Error ("builder changed its script, cannot find: " + $replacement[0]); exit 1 }
 
-            $text = $text.Replace($upgrade[0], $upgrade[1])
+            $text = $text.Replace($replacement[0], $replacement[1])
           }
 
           if ($text.Contains('AtLeastWin7') -or $text.Contains('RequireWindows7')) { Write-Error 'a windows 7 reference is left in the installer script'; exit 1 }
 
-          # makensis only learned AtLeastWin10 in NSIS 3.04, and choco chooses the version we get
-          $winver = Join-Path (Split-Path (Get-Command makensis.exe).Source) '..\Include\WinVer.nsh'
+          # NSIS 3.11 and later generate the windows 10 test, so it is compiled instead of searched for in the header
+          $probe = Join-Path $env:TEMP 'nsis_winver_probe.nsi'
+          $probeOut = Join-Path $env:TEMP 'nsis_winver_probe.exe'
 
-          if (-not (Select-String -Path $winver -Pattern 'AtLeastWin10' -Quiet)) { Write-Error "this NSIS has no AtLeastWin10 macro: $winver"; exit 1 }
+          if (Test-Path $probeOut) { Remove-Item $probeOut -Force }
+
+          # the version test calls a function, which is only allowed inside a section or a function
+          $probeBody = @'
+          !include "WinVer.nsh"
+
+          Function Probe
+            ${If} ${AtLeastWin10}
+              DetailPrint "windows 10 or later"
+            ${EndIf}
+          FunctionEnd
+
+          Section "Probe"
+            Call Probe
+          SectionEnd
+          '@
+
+          # the output path belongs into the script, the command line would split it at every space
+          ('OutFile "' + $probeOut + '"' + "`n" + $probeBody) | Set-Content -Path $probe -Encoding utf8NoBOM
+
+          & makensis.exe /V2 $probe
+
+          if ($LASTEXITCODE -ne 0) { Write-Error 'this NSIS cannot compile a windows 10 version test'; exit 1 }
+          if (-not (Test-Path $probeOut)) { Write-Error 'the probe did not produce an output file'; exit 1 }
+
+          # the builder script carries no output name, it used to come from the command line
+          $setup = Join-Path '${{ steps.stage.outputs.out }}' ('memreduct-${{ steps.version.outputs.version }}-setup.exe')
+
+          $text = 'OutFile "' + $setup + '"' + "`n" + $text
 
           Set-Content -Path $nsi -Value $text -NoNewline -Encoding utf8NoBOM
 
-          Select-String -Path $nsi -Pattern 'APP_FILES_DIR|RunningX64|AtLeastWin' | Select-Object LineNumber, Line
+          Select-String -Path $nsi -Pattern 'APP_FILES_DIR|RunningX64|AtLeastWin|APP_AUTHOR|APP_WEBSITE' | Select-Object LineNumber, Line
 
       - name: Build installer
         shell: pwsh
@@ -267,13 +309,13 @@ jobs:
           if (Test-Path $setup) { Remove-Item $setup -Force }
 
           # the same defines build_package.py passed to makensis, kept as one argument each
+          # the output path is part of the installer script, the command line would split it at every space
           $options = @(
             '/V2',
             ('/DAPP_FILES_DIR=' + $stage),
             ('/DAPP_NAME=' + $env:APP_NAME),
             ('/DAPP_NAME_SHORT=' + $env:APP_NAME_SHORT),
             ('/DAPP_VERSION=' + $version),
-            ('/XOutFile "' + $setup + '"'),
             'src\setup_script.nsi'
           )
 
