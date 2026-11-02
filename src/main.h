@@ -51,6 +51,9 @@ DEFINE_GUID (GUID_TrayIcon, 0xAE9053F0, 0x8D59, 0x4803, 0x9A, 0xBB, 0x74, 0xAF, 
 // minimum pause (in seconds) between usage-based automatic cleanups
 #define AUTOREDUCT_COOLDOWN 30
 
+// how long the usage has to stay above the limit before autoclean reacts (one tick is one second)
+#define AUTOREDUCT_TRIGGER_TICKS 5
+
 // routine never trims the debug log, so truncate it once it grows past this size (bytes)
 #define LOG_MAXIMUM_SIZE 0x100000
 

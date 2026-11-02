@@ -623,6 +623,31 @@ VOID _app_memoryclean (
 		}
 	}
 
+	// Flush registry cache
+	if ((mask & REDUCT_REGISTRYCACHE) == REDUCT_REGISTRYCACHE)
+	{
+		status = NtSetSystemInformation (SystemRegistryReconciliationInformation, NULL, 0);
+
+		if (!NT_SUCCESS (status))
+		{
+			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"SystemRegistryReconciliationInformation");
+			is_failed = TRUE;
+		}
+	}
+
+	// Combine memory lists
+	if ((mask & REDUCT_COMBINEMEMORYLISTS) == REDUCT_COMBINEMEMORYLISTS)
+	{
+		status = NtSetSystemInformation (SystemCombinePhysicalMemoryInformation, &combine_info_ex, sizeof (MEMORY_COMBINE_INFORMATION_EX));
+
+		if (!NT_SUCCESS (status))
+		{
+			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"SystemCombinePhysicalMemoryInformation");
+			is_failed = TRUE;
+		}
+	}
+
+	// the purges run last, so the pages the steps above moved into the standby list are freed by the same click
 	// Standby list (vista+)
 	if ((mask & REDUCT_STANDBYLIST) == REDUCT_STANDBYLIST)
 	{
@@ -647,30 +672,6 @@ VOID _app_memoryclean (
 		if (!NT_SUCCESS (status))
 		{
 			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"MemoryPurgeLowPriorityStandbyList");
-			is_failed = TRUE;
-		}
-	}
-
-	// Flush registry cache
-	if ((mask & REDUCT_REGISTRYCACHE) == REDUCT_REGISTRYCACHE)
-	{
-		status = NtSetSystemInformation (SystemRegistryReconciliationInformation, NULL, 0);
-
-		if (!NT_SUCCESS (status))
-		{
-			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"SystemRegistryReconciliationInformation");
-			is_failed = TRUE;
-		}
-	}
-
-	// Combine memory lists
-	if ((mask & REDUCT_COMBINEMEMORYLISTS) == REDUCT_COMBINEMEMORYLISTS)
-	{
-		status = NtSetSystemInformation (SystemCombinePhysicalMemoryInformation, &combine_info_ex, sizeof (MEMORY_COMBINE_INFORMATION_EX));
-
-		if (!NT_SUCCESS (status))
-		{
-			_r_log (LOG_LEVEL_ERROR, NULL, L"NtSetSystemInformation", status, L"SystemCombinePhysicalMemoryInformation");
 			is_failed = TRUE;
 		}
 	}
@@ -2090,6 +2091,9 @@ VOID CALLBACK _app_timercallback (
 	ULONG pending_mask;
 	BOOLEAN is_clean = FALSE;
 
+	// how many ticks in a row the usage has been above the limit
+	static ULONG over_limit_ticks = 0;
+
 	if (id_event != UID)
 		return;
 
@@ -2118,11 +2122,22 @@ VOID CALLBACK _app_timercallback (
 			// 0 is the "Disable" entry of the tray submenu, not a threshold to compare against
 			if (limit_value != 0 && mem_info.physical_memory.percent >= limit_value)
 			{
-				// cooldown prevents cleaning loop when memory usage stays above the limit (issue #191)
-				timestamp = _r_unixtime_now () - _r_config_getlong64_ex (L"StatisticLastReduct", 0, NULL);
+				// a load that only touches the limit for a moment must not start a cleanup
+				if (over_limit_ticks < AUTOREDUCT_TRIGGER_TICKS)
+					over_limit_ticks++;
 
-				if (timestamp >= AUTOREDUCT_COOLDOWN)
-					is_clean = TRUE;
+				if (over_limit_ticks >= AUTOREDUCT_TRIGGER_TICKS)
+				{
+					// cooldown prevents cleaning loop when memory usage stays above the limit (issue #191)
+					timestamp = _r_unixtime_now () - _r_config_getlong64_ex (L"StatisticLastReduct", 0, NULL);
+
+					if (timestamp >= AUTOREDUCT_COOLDOWN)
+						is_clean = TRUE;
+				}
+			}
+			else
+			{
+				over_limit_ticks = 0;
 			}
 		}
 
@@ -3511,7 +3526,8 @@ NTSTATUS _app_update_downloadinstaller (
 	_In_ PR_STRING version,
 	_In_ PR_STRING url,
 	_In_ PR_STRING hash,
-	_Out_ PR_STRING_PTR out_path
+	_Out_ PR_STRING_PTR out_path,
+	_Out_ PHANDLE out_handle
 )
 {
 	WCHAR token[0x11];
@@ -3526,6 +3542,7 @@ NTSTATUS _app_update_downloadinstaller (
 	NTSTATUS status;
 
 	*out_path = NULL;
+	*out_handle = NULL;
 
 	temp_directory = _r_sys_gettempdirectory ();
 
@@ -3562,6 +3579,27 @@ NTSTATUS _app_update_downloadinstaller (
 	if (!NT_SUCCESS (status))
 		goto CleanupExit;
 
+	// the write handle is replaced by a read-only one: the image loader opens the file with FILE_SHARE_READ
+	// only, which a granted write access would block. The read handle is held until the installer has started,
+	// so the file cannot be swapped after the hash was taken from it below.
+	NtClose (hfile);
+	hfile = NULL;
+
+	status = _r_fs_createfile (
+		&path->sr,
+		FILE_OPEN,
+		GENERIC_READ,
+		FILE_SHARE_READ,
+		FILE_ATTRIBUTE_NORMAL,
+		FILE_RANDOM_ACCESS,
+		FALSE,
+		NULL,
+		&hfile
+	);
+
+	if (!NT_SUCCESS (status))
+		goto CleanupExit;
+
 	// verify the payload really is an executable and not an error response
 	file_size = 0;
 
@@ -3573,7 +3611,8 @@ NTSTATUS _app_update_downloadinstaller (
 		goto CleanupExit;
 	}
 
-	// checking the bytes we wrote through this handle - re-opening by path would leave a window for swapping the file
+	// the hash is taken through the handle that stays open, so a file swapped before this point fails the
+	// comparison and a file swapped after it cannot be opened for writing at all
 	new_pos.QuadPart = 0;
 
 	status = _r_fs_setpos (hfile, &new_pos);
@@ -3612,15 +3651,17 @@ NTSTATUS _app_update_downloadinstaller (
 
 CleanupExit:
 
-	if (hfile)
-		NtClose (hfile);
-
 	if (status == STATUS_SUCCESS)
 	{
+		// the handle stays open, so nothing can replace the file between the hash check and the elevation prompt
 		*out_path = path;
+		*out_handle = hfile;
 	}
 	else
 	{
+		if (hfile)
+			NtClose (hfile);
+
 		_r_fs_deletefile (&path->sr, NULL);
 
 		_r_obj_dereference (path);
@@ -3648,6 +3689,7 @@ NTSTATUS NTAPI _app_update_thread (
 	PR_STRING url = NULL;
 	PR_STRING hash = NULL;
 	PR_STRING path = NULL;
+	HANDLE hfile = NULL;
 	R_STRINGREF current_ref;
 	HINTERNET hsession = NULL;
 	BOOLEAN is_launched = FALSE;
@@ -3714,7 +3756,7 @@ NTSTATUS NTAPI _app_update_thread (
 		goto CleanupExit;
 	}
 
-	status = _app_update_downloadinstaller (hsession, version, url, hash, &path);
+	status = _app_update_downloadinstaller (hsession, version, url, hash, &path, &hfile);
 
 	if (!NT_SUCCESS (status))
 	{
@@ -3736,6 +3778,13 @@ NTSTATUS NTAPI _app_update_thread (
 	status = _r_sys_runasadmin (path->buffer, NULL, NULL);
 
 	is_launched = (status == STATUS_SUCCESS);
+
+	// release the file now that the installer has taken it, a handle held longer would block its own cleanup
+	if (hfile)
+	{
+		NtClose (hfile);
+		hfile = NULL;
+	}
 
 	if (is_launched)
 	{

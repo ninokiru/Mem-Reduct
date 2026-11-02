@@ -1,4 +1,4 @@
-v0.0.1 (22 October 2026)
+v0.0.1 (2 November 2026)
 - reset fork version to 0.0.1 with its own update channel
 - added automatic update check with direct in-app installer download
 - the update manifest sha256 is now mandatory and the download runs over https with certificate validation always on
@@ -46,3 +46,6 @@ v0.0.1 (22 October 2026)
 - light and dark palettes follow the system theme, and the guest/administrator chip and footer note are localized
 - the overflow button and a right click open the menu, and the language submenu is rebuilt every time it opens
 - the figures in the memory card are refreshed every second, so the used and free amounts stay correct even when the percentage does not change
+- automatic cleaning waits five seconds above the limit instead of reacting to a single spike
+- the standby list purges run last, so pages released by the registry flush and the page-combining step are freed in the same cleanup
+- the downloaded installer stays open until it is launched, so it cannot be replaced after the hash check

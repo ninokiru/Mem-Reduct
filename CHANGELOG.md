@@ -1,4 +1,4 @@
-v0.0.1 (22 October 2026)
+v0.0.1 (2 November 2026)
 
 \- first build of the fork, based on the upstream Mem Reduct project by Henry++
 
@@ -128,3 +128,9 @@ v0.0.1 (22 October 2026)
 \- clicking Clean, a tray region entry or the hotkey while the application runs without administrator rights now cleans in the elevated copy: the request is stored before the restart, so the second click is gone
 
 \- the figures in the new memory card are refreshed every second instead of only when the percentage changes, so the used and free amounts cannot go stale
+
+\- automatic cleaning now waits until the usage has stayed above the limit for five seconds, so a load that only touches the limit for a moment no longer starts a cleanup
+
+\- the standby purges run last, after the registry flush and the page-combining step, so the pages those steps release are freed by the same click instead of staying in the standby list
+
+\- the downloaded installer is held open until the elevation prompt is accepted, so the file cannot be swapped after its sha256 was checked
