@@ -136,3 +136,7 @@ v0.0.1 (2 November 2026)
 \- the downloaded installer is held open until the elevation prompt is accepted, so the file cannot be swapped after its sha256 was checked
 
 \- the settings pages are rebuilt as flat rows under a bold section header: the group boxes that framed every page are gone, and the captions no longer carry a trailing colon
+
+\- the settings pages are laid out on the same dialog-unit basis as the frame around them: the frame is scaled by MS Shell Dlg 8 while the pages were scaled by Segoe UI 9, so every page came out about a sixth wider and taller than the space it was given and lost its right column and last row
+
+\- the copyright line of the About dialog is one short sentence now, and still names the author of the original work
