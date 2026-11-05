@@ -2314,6 +2314,42 @@ FORCEINLINE VOID _app_setfontcontrol (
 	_r_ctrl_setstringformat (hwnd, ctrl_id, L"%s, %" TEXT (PR_LONG) L"px, %" TEXT (PR_LONG), logfont->lfFaceName, _r_dc_fontheighttosize (logfont->lfHeight, dpi_value), logfont->lfWeight);
 }
 
+// the combo order is balanced, aggressive, custom: a hand-picked combination is not one of the presets any more
+INT _app_preset_getindex (
+	_In_ ULONG mask
+)
+{
+	if (mask == REDUCT_MASK_DEFAULT)
+		return 0;
+
+	if (mask == REDUCT_MASK_ALL)
+		return 1;
+
+	return 2;
+}
+
+// the list view reports every programmatic check as a user toggle, which would rewrite the mask and ask again
+VOID _app_settings_setmask (
+	_In_ HWND hwnd,
+	_In_ ULONG mask
+)
+{
+	_r_wnd_setcontext (hwnd, IDC_REGIONS, INVALID_HANDLE_VALUE);
+
+	_r_listview_setitemcheck (hwnd, IDC_REGIONS, 0, (mask & REDUCT_WORKINGSET) == REDUCT_WORKINGSET);
+	_r_listview_setitemcheck (hwnd, IDC_REGIONS, 1, (mask & REDUCT_SYSTEMFILECACHE) == REDUCT_SYSTEMFILECACHE);
+	_r_listview_setitemcheck (hwnd, IDC_REGIONS, 2, (mask & REDUCT_MODIFIEDLIST) == REDUCT_MODIFIEDLIST);
+	_r_listview_setitemcheck (hwnd, IDC_REGIONS, 3, (mask & REDUCT_STANDBYLIST) == REDUCT_STANDBYLIST);
+	_r_listview_setitemcheck (hwnd, IDC_REGIONS, 4, (mask & REDUCT_STANDBYPRIORITY0LIST) == REDUCT_STANDBYPRIORITY0LIST);
+	_r_listview_setitemcheck (hwnd, IDC_REGIONS, 5, (mask & REDUCT_MODIFIEDFILECACHE) == REDUCT_MODIFIEDFILECACHE);
+	_r_listview_setitemcheck (hwnd, IDC_REGIONS, 6, (mask & REDUCT_REGISTRYCACHE) == REDUCT_REGISTRYCACHE);
+	_r_listview_setitemcheck (hwnd, IDC_REGIONS, 7, (mask & REDUCT_COMBINEMEMORYLISTS) == REDUCT_COMBINEMEMORYLISTS);
+
+	_r_wnd_removecontext (hwnd, IDC_REGIONS);
+
+	_r_config_setulong_ex (L"ReductMask2", mask, NULL);
+}
+
 // routine builds the settings navigation as a framed tree with connector lines, which is what makes the window read like the original
 VOID _app_settings_pageinit (
 	_In_ HWND hwnd
@@ -2415,14 +2451,9 @@ INT_PTR CALLBACK SettingsProc (
 
 					mask = _r_config_getulong_ex (L"ReductMask2", REDUCT_MASK_DEFAULT, NULL);
 
-					_r_listview_setitemcheck (hwnd, IDC_REGIONS, 0, (mask & REDUCT_WORKINGSET) == REDUCT_WORKINGSET);
-					_r_listview_setitemcheck (hwnd, IDC_REGIONS, 1, (mask & REDUCT_SYSTEMFILECACHE) == REDUCT_SYSTEMFILECACHE);
-					_r_listview_setitemcheck (hwnd, IDC_REGIONS, 2, (mask & REDUCT_MODIFIEDLIST) == REDUCT_MODIFIEDLIST);
-					_r_listview_setitemcheck (hwnd, IDC_REGIONS, 3, (mask & REDUCT_STANDBYLIST) == REDUCT_STANDBYLIST);
-					_r_listview_setitemcheck (hwnd, IDC_REGIONS, 4, (mask & REDUCT_STANDBYPRIORITY0LIST) == REDUCT_STANDBYPRIORITY0LIST);
-					_r_listview_setitemcheck (hwnd, IDC_REGIONS, 5, (mask & REDUCT_MODIFIEDFILECACHE) == REDUCT_MODIFIEDFILECACHE);
-					_r_listview_setitemcheck (hwnd, IDC_REGIONS, 6, (mask & REDUCT_REGISTRYCACHE) == REDUCT_REGISTRYCACHE);
-					_r_listview_setitemcheck (hwnd, IDC_REGIONS, 7, (mask & REDUCT_COMBINEMEMORYLISTS) == REDUCT_COMBINEMEMORYLISTS);
+					_app_settings_setmask (hwnd, mask);
+
+					_r_combobox_setcurrentitembylparam (hwnd, IDC_REDUCTPRESET, _app_preset_getindex (mask));
 
 					_r_wnd_removecontext (hwnd, IDC_REGIONS);
 
@@ -2551,6 +2582,15 @@ INT_PTR CALLBACK SettingsProc (
 
 				case IDD_SETTINGS_MEMORY:
 				{
+					_r_ctrl_setstring (hwnd, IDC_PRESET_HINT, _r_locale_getstring (IDS_PRESET_HINT));
+
+					_r_combobox_clear (hwnd, IDC_REDUCTPRESET);
+
+					for (INT i = 0; i < 3; i++)
+						_r_combobox_insertitem (hwnd, IDC_REDUCTPRESET, i, _r_locale_getstring (IDS_PRESET_BALANCED + i), i);
+
+					_r_combobox_setcurrentitembylparam (hwnd, IDC_REDUCTPRESET, _app_preset_getindex (_r_config_getulong_ex (L"ReductMask2", REDUCT_MASK_DEFAULT, NULL)));
+
 					_r_ctrl_setstring (hwnd, IDC_AUTOREDUCTENABLE_CHK, _r_locale_getstring (IDS_AUTOREDUCTENABLE_CHK));
 					_r_ctrl_setstring (hwnd, IDC_AUTOREDUCTINTERVALENABLE_CHK, _r_locale_getstring (IDS_AUTOREDUCTINTERVALENABLE_CHK));
 					_r_ctrl_setstring (hwnd, IDC_HOTKEY_CLEAN_CHK, _r_locale_getstring (IDS_HOTKEY_CLEAN_CHK));
@@ -2755,6 +2795,9 @@ INT_PTR CALLBACK SettingsProc (
 						}
 
 						_r_config_setulong_ex (L"ReductMask2", mask, NULL);
+
+						// the combination was picked by hand now, so the preset either matches it or falls back to custom
+						_r_combobox_setcurrentitembylparam (hwnd, IDC_REDUCTPRESET, _app_preset_getindex (mask));
 					}
 
 					break;
@@ -2939,6 +2982,27 @@ INT_PTR CALLBACK SettingsProc (
 					BOOLEAN is_enable = _r_ctrl_isbuttonchecked (hwnd, ctrl_id);
 
 					_app_update_enable (is_enable);
+
+					break;
+				}
+
+				case IDC_REDUCTPRESET:
+				{
+					if (notify_code == CBN_SELCHANGE)
+					{
+						INT index = _r_combobox_getcurrentitem (hwnd, ctrl_id);
+
+						// the aggressive preset switches on the two purges that can stall the machine, so it asks first
+						if (index == 1 && !_r_show_confirmmessage (hwnd, _r_app_getname (), _r_locale_getstring (IDS_QUESTION_WARNING), L"IsShowWarningConfirmation", FALSE))
+						{
+							_r_combobox_setcurrentitembylparam (hwnd, ctrl_id, _app_preset_getindex (_r_config_getulong_ex (L"ReductMask2", REDUCT_MASK_DEFAULT, NULL)));
+
+							break;
+						}
+
+						if (index == 0 || index == 1)
+							_app_settings_setmask (hwnd, (index == 0) ? REDUCT_MASK_DEFAULT : REDUCT_MASK_ALL);
+					}
 
 					break;
 				}

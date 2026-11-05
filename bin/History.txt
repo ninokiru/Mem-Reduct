@@ -55,3 +55,4 @@ v0.0.1 (2 November 2026)
 - the About copyright line is one short sentence and still credits the original author
 - the tray menu has a check for updates entry
 - checking for updates and downloading the installer show a tray notification while they work
+- cleaning presets on the memory page: balanced and aggressive fill the region list in one step, a hand-picked combination shows as custom

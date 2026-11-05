@@ -144,3 +144,5 @@ v0.0.1 (2 November 2026)
 \- the tray menu carries a "check for updates" entry, so a window that lives in the tray does not have to be opened just to look for a release
 
 \- a manual update check and the installer download announce themselves with a tray notification: both used to run with no sign of activity until a dialog or the elevation prompt appeared, while the strings meant for exactly this shipped unused
+
+\- the memory page carries a cleaning preset: balanced and aggressive set the whole region list in one step, the aggressive one asks the same freeze warning as the list, and ticking a region by hand switches the preset to custom
