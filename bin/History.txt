@@ -53,3 +53,5 @@ v0.0.1 (2 November 2026)
 - the settings navigation is a plain list now: no frame, no connector lines, no tree buttons
 - the settings pages share the dialog-unit basis of the frame around them, so their right column and last row are no longer cut off
 - the About copyright line is one short sentence and still credits the original author
+- the tray menu has a check for updates entry
+- checking for updates and downloading the installer show a tray notification while they work

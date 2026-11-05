@@ -140,3 +140,7 @@ v0.0.1 (2 November 2026)
 \- the settings pages are laid out on the same dialog-unit basis as the frame around them: the frame is scaled by MS Shell Dlg 8 while the pages were scaled by Segoe UI 9, so every page came out about a sixth wider and taller than the space it was given and lost its right column and last row
 
 \- the copyright line of the About dialog is one short sentence now, and still names the author of the original work
+
+\- the tray menu carries a "check for updates" entry, so a window that lives in the tray does not have to be opened just to look for a release
+
+\- a manual update check and the installer download announce themselves with a tray notification: both used to run with no sign of activity until a dialog or the elevation prompt appeared, while the strings meant for exactly this shipped unused

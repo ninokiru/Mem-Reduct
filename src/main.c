@@ -3751,6 +3751,10 @@ NTSTATUS NTAPI _app_update_thread (
 		goto CleanupExit;
 	}
 
+	// a manual check used to show nothing at all until the answer arrived, which reads like a dead menu entry
+	if (!task.is_silent)
+		_r_tray_popup (_app_update_parent (task.hwnd), &GUID_TrayIcon, NIIF_INFO | NIIF_NOSOUND, _r_app_getname (), _r_locale_getstring (IDS_UPDATE_INIT));
+
 	status = _app_update_query (hsession, &version, &url, &hash);
 
 	if (!NT_SUCCESS (status))
@@ -3788,6 +3792,9 @@ NTSTATUS NTAPI _app_update_thread (
 
 		goto CleanupExit;
 	}
+
+	// the download runs in this thread, so the window would stay silent until the elevation prompt
+	_r_tray_popup (_app_update_parent (task.hwnd), &GUID_TrayIcon, NIIF_INFO | NIIF_NOSOUND, _r_app_getname (), _r_locale_getstring (IDS_UPDATE_DOWNLOAD));
 
 	status = _app_update_downloadinstaller (hsession, version, url, hash, &path, &hfile);
 
@@ -3885,7 +3892,11 @@ BOOLEAN _app_update_check (
 
 		_InterlockedExchange (&update_isbusy, 0);
 
-		_r_show_errormessage (hwnd, L"Could not create thread!", status, NULL, ET_NATIVE);
+		// a scheduled check runs without a window to parent a message box to, and nothing asked for it
+		if (is_silent)
+			_r_log (LOG_LEVEL_ERROR, NULL, L"_app_update_check", status, L"Could not create the update thread!");
+		else
+			_r_show_errormessage (hwnd, L"Could not create thread!", status, NULL, ET_NATIVE);
 
 		return FALSE;
 	}
@@ -4294,6 +4305,7 @@ INT_PTR CALLBACK DlgProc (
 					_r_menu_setitemtext (hsubmenu, TRAY_SUBMENU_2, TRUE, _r_locale_getstring (IDS_TRAY_POPUP_2));
 					_r_menu_setitemtext (hsubmenu, TRAY_SUBMENU_3, TRUE, _r_locale_getstring (IDS_TRAY_POPUP_3));
 					_r_menu_setitemtextformat (hsubmenu, IDM_TRAY_SETTINGS, FALSE, L"%s...", _r_locale_getstring (IDS_SETTINGS));
+					_r_menu_setitemtext (hsubmenu, IDM_TRAY_CHECKUPDATES, FALSE, _r_locale_getstring (IDS_CHECKUPDATES));
 					_r_menu_setitemtext (hsubmenu, IDM_TRAY_WEBSITE, FALSE, _r_locale_getstring (IDS_WEBSITE));
 					_r_menu_setitemtext (hsubmenu, IDM_TRAY_ABOUT, FALSE, _r_locale_getstring (IDS_ABOUT));
 					_r_menu_setitemtext (hsubmenu, IDM_TRAY_EXIT, FALSE, _r_locale_getstring (IDS_EXIT));
@@ -4701,6 +4713,7 @@ INT_PTR CALLBACK DlgProc (
 				}
 
 				case IDM_CHECKUPDATES:
+				case IDM_TRAY_CHECKUPDATES:
 				{
 					_app_update_check (hwnd, FALSE);
 					break;
