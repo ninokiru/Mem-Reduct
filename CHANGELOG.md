@@ -134,3 +134,5 @@ v0.0.1 (2 November 2026)
 \- the standby purges run last, after the registry flush and the page-combining step, so the pages those steps release are freed by the same click instead of staying in the standby list
 
 \- the downloaded installer is held open until the elevation prompt is accepted, so the file cannot be swapped after its sha256 was checked
+
+\- the settings pages are rebuilt as flat rows under a bold section header: the group boxes that framed every page are gone, and the captions no longer carry a trailing colon

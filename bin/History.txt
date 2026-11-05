@@ -49,3 +49,5 @@ v0.0.1 (2 November 2026)
 - automatic cleaning waits five seconds above the limit instead of reacting to a single spike
 - the standby list purges run last, so pages released by the registry flush and the page-combining step are freed in the same cleanup
 - the downloaded installer stays open until it is launched, so it cannot be replaced after the hash check
+- the settings pages are flat rows under bold section headers, the group boxes around every page are gone
+- the settings navigation is a plain list now: no frame, no connector lines, no tree buttons

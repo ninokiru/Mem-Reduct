@@ -2314,6 +2314,37 @@ FORCEINLINE VOID _app_setfontcontrol (
 	_r_ctrl_setstringformat (hwnd, ctrl_id, L"%s, %" TEXT (PR_LONG) L"px, %" TEXT (PR_LONG), logfont->lfFaceName, _r_dc_fontheighttosize (logfont->lfHeight, dpi_value), logfont->lfWeight);
 }
 
+// routine builds the settings navigation as a framed tree with connector lines, which is what makes the window read like the original
+VOID _app_settings_pageinit (
+	_In_ HWND hwnd
+)
+{
+	static const INT title_ids[] = {IDC_TITLE_1, IDC_TITLE_2, IDC_TITLE_3, IDC_TITLE_4, IDC_TITLE_5, IDC_TITLE_6, IDC_TITLE_7, IDC_TITLE_8, IDC_TITLE_9};
+	HWND hsettings;
+	HWND hnav;
+
+	hsettings = _r_settings_getwindow ();
+
+	if (hsettings)
+	{
+		hnav = GetDlgItem (hsettings, IDC_NAV);
+
+		if (hnav)
+		{
+			_r_wnd_setstyle (hnav, WS_BORDER | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT, 0, GWL_STYLE);
+
+			SetWindowPos (hnav, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+
+			_r_treeview_setstyle (hsettings, IDC_NAV, TVS_EX_DOUBLEBUFFER, 0, 6);
+		}
+	}
+
+	for (ULONG_PTR i = 0; i < RTL_NUMBER_OF (title_ids); i++)
+	{
+		_r_ctrl_setfont (hwnd, title_ids[i], config.hfont_ui_smallbold);
+	}
+}
+
 INT_PTR CALLBACK SettingsProc (
 	_In_ HWND hwnd,
 	_In_ UINT msg,
@@ -2326,6 +2357,8 @@ INT_PTR CALLBACK SettingsProc (
 		case RM_INITIALIZE:
 		{
 			INT dialog_id = (INT)wparam;
+
+			_app_settings_pageinit (hwnd);
 
 			switch (dialog_id)
 			{
@@ -2491,15 +2524,15 @@ INT_PTR CALLBACK SettingsProc (
 			INT dialog_id = (INT)wparam;
 
 			// localize titles
-			_r_ctrl_setstringformat (hwnd, IDC_TITLE_1, L"%s:", _r_locale_getstring (IDS_TITLE_1));
-			_r_ctrl_setstringformat (hwnd, IDC_TITLE_2, L"%s:", _r_locale_getstring (IDS_TITLE_2));
-			_r_ctrl_setstringformat (hwnd, IDC_TITLE_3, L"%s:", _r_locale_getstring (IDS_TITLE_3));
-			_r_ctrl_setstringformat (hwnd, IDC_TITLE_4, L"%s:", _r_locale_getstring (IDS_TITLE_4));
-			_r_ctrl_setstringformat (hwnd, IDC_TITLE_5, L"%s:", _r_locale_getstring (IDS_TITLE_5));
-			_r_ctrl_setstringformat (hwnd, IDC_TITLE_6, L"%s:", _r_locale_getstring (IDS_TITLE_6));
-			_r_ctrl_setstringformat (hwnd, IDC_TITLE_7, L"%s:", _r_locale_getstring (IDS_TITLE_7));
-			_r_ctrl_setstringformat (hwnd, IDC_TITLE_8, L"%s:", _r_locale_getstring (IDS_TITLE_8));
-			_r_ctrl_setstringformat (hwnd, IDC_TITLE_9, L"%s:", _r_locale_getstring (IDS_TITLE_9));
+			_r_ctrl_setstring (hwnd, IDC_TITLE_1, _r_locale_getstring (IDS_TITLE_1));
+			_r_ctrl_setstring (hwnd, IDC_TITLE_2, _r_locale_getstring (IDS_TITLE_2));
+			_r_ctrl_setstring (hwnd, IDC_TITLE_3, _r_locale_getstring (IDS_TITLE_3));
+			_r_ctrl_setstring (hwnd, IDC_TITLE_4, _r_locale_getstring (IDS_TITLE_4));
+			_r_ctrl_setstring (hwnd, IDC_TITLE_5, _r_locale_getstring (IDS_TITLE_5));
+			_r_ctrl_setstring (hwnd, IDC_TITLE_6, _r_locale_getstring (IDS_TITLE_6));
+			_r_ctrl_setstring (hwnd, IDC_TITLE_7, _r_locale_getstring (IDS_TITLE_7));
+			_r_ctrl_setstring (hwnd, IDC_TITLE_8, _r_locale_getstring (IDS_TITLE_8));
+			_r_ctrl_setstring (hwnd, IDC_TITLE_9, _r_locale_getstring (IDS_TITLE_9));
 
 			switch (dialog_id)
 			{
@@ -2575,7 +2608,7 @@ INT_PTR CALLBACK SettingsProc (
 				case IDD_SETTINGS_ADVANCED:
 				{
 					// the page shares IDC_TITLE_1 with the general page, so its caption must be overwritten after the common pass
-					_r_ctrl_setstringformat (hwnd, IDC_TITLE_1, L"%s:", _r_locale_getstring (IDS_TITLE_ADVANCED));
+					_r_ctrl_setstring (hwnd, IDC_TITLE_1, _r_locale_getstring (IDS_TITLE_ADVANCED));
 
 					_r_ctrl_setstring (hwnd, IDC_ALLOWSTANDBYLISTCLEANUP_CHK, _r_locale_getstring (IDS_ALLOWSTANDBYLISTCLEANUP_CHK));
 					_r_ctrl_setstring (hwnd, IDC_LOGRESULTS_CHK, _r_locale_getstring (IDS_LOGRESULTS_CHK));
