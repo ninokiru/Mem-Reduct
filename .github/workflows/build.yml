@@ -162,7 +162,16 @@ jobs:
       - name: Install packaging tools
         shell: pwsh
         run: |
-          choco install nsis --no-progress -y
+          # the community feed answers a failed download now and then, and that must not read like a build failure
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            choco install nsis --no-progress -y
+
+            if ($LASTEXITCODE -eq 0) { break }
+
+            if ($attempt -eq 3) { Write-Error "choco did not install nsis (exit $LASTEXITCODE, attempt $attempt)"; exit 1 }
+
+            Start-Sleep -Seconds (15 * $attempt)
+          }
 
           # the compiler sits in a different folder for the 32-bit and for the 64-bit package, so it is looked up
           $makensis = Get-ChildItem 'C:\Program Files (x86)\NSIS', 'C:\Program Files\NSIS' -Filter 'makensis.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -171,6 +180,7 @@ jobs:
 
           $makensis.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append
           $makensis.FullName
+          & $makensis.FullName /VERSION
 
       - name: Stage packages
         id: stage
