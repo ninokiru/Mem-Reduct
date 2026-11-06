@@ -1,4 +1,4 @@
-v0.0.1 (2 November 2026)
+v0.0.2 (6 November 2026)
 
 \- first build of the fork, based on the upstream Mem Reduct project by Henry++
 

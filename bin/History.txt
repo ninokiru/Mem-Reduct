@@ -1,5 +1,5 @@
-v0.0.1 (2 November 2026)
-- reset fork version to 0.0.1 with its own update channel
+v0.0.2 (6 November 2026)
+- the fork keeps its own version numbering, starting at 0.0.2, with its own update channel
 - added automatic update check with direct in-app installer download
 - the update manifest sha256 is now mandatory and the download runs over https with certificate validation always on
 - the installer is downloaded to a randomly named temporary file and verified through that same handle before it runs

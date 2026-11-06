@@ -12,7 +12,7 @@
 -------
 
 <p align="center">
-	<a href="https://github.com/ninokiru/Mem-Reduct">ninokiru/Mem-Reduct</a> - maintained fork of <a href="https://github.com/henrypp/memreduct">henrypp/memreduct</a> (by Henry++), rebuilt as version 0.0.1 with fixes and its own update channel.
+	<a href="https://github.com/ninokiru/Mem-Reduct">ninokiru/Mem-Reduct</a> - maintained fork of <a href="https://github.com/henrypp/memreduct">henrypp/memreduct</a> (by Henry++), rebuilt with its own version numbering, fixes and update channel.
 </p>
 
 <p align="center">
